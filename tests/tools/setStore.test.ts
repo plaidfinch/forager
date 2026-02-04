@@ -709,4 +709,201 @@ describe("setStoreTool", () => {
       expect(mockExtract).not.toHaveBeenCalled();
     });
   });
+
+  describe("edge cases", () => {
+    it("handles network timeout errors gracefully", async () => {
+      // Add store to stores.db
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+
+      // Add API credentials
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('key', 'APP', datetime('now'))`);
+
+      // Create empty store database
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      const mockRefresh = vi.fn(async (): Promise<RefreshResult> => {
+        return {
+          success: false,
+          productsAdded: 0,
+          categoriesAdded: 0,
+          tagsAdded: 0,
+          error: "Request timeout: exceeded 30000ms",
+        };
+      });
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/timeout/i);
+      expect(result.productCount).toBe(0);
+    });
+
+    it("handles server errors (500) without retry", async () => {
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('key', 'APP', datetime('now'))`);
+
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      const mockRefresh = vi.fn(async (): Promise<RefreshResult> => {
+        return {
+          success: false,
+          productsAdded: 0,
+          categoriesAdded: 0,
+          tagsAdded: 0,
+          error: "Algolia error: 500 Internal Server Error",
+          status: 500,
+        };
+      });
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const mockExtract = vi.fn();
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+        extractFn: mockExtract,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/500/);
+      // Should not retry for 500 errors (not auth-related)
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(mockExtract).not.toHaveBeenCalled();
+    });
+
+    it("handles rate limit errors (429)", async () => {
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('key', 'APP', datetime('now'))`);
+
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      const mockRefresh = vi.fn(async (): Promise<RefreshResult> => {
+        return {
+          success: false,
+          productsAdded: 0,
+          categoriesAdded: 0,
+          tagsAdded: 0,
+          error: "Algolia error: 429 Too Many Requests",
+          status: 429,
+        };
+      });
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/429/);
+    });
+
+    it("handles partial refresh failure - returns error with zero products", async () => {
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('key', 'APP', datetime('now'))`);
+
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      // Simulate partial failure - some products were added before error
+      const mockRefresh = vi.fn(async (): Promise<RefreshResult> => {
+        return {
+          success: false,
+          productsAdded: 500, // Partial progress before failure
+          categoriesAdded: 10,
+          tagsAdded: 5,
+          error: "Connection reset after 500 products",
+        };
+      });
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+      });
+
+      // Should report failure even if partial progress was made
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Connection reset/);
+    });
+
+    it("handles exception thrown during refresh", async () => {
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('key', 'APP', datetime('now'))`);
+
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      const mockRefresh = vi.fn(async (): Promise<RefreshResult> => {
+        throw new Error("Unexpected exception during refresh");
+      });
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Unexpected exception/);
+    });
+
+    it("handles database open failure gracefully", async () => {
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+
+      const mockOpenStore = vi.fn(() => {
+        throw new Error("SQLITE_CANTOPEN: unable to open database file");
+      });
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        openStoreDatabaseFn: mockOpenStore,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/unable to open database/i);
+    });
+  });
 });
