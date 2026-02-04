@@ -126,6 +126,21 @@ function storeApiKey(settingsDb: Database.Database, apiKey: string, appId: strin
 }
 
 /**
+ * Clear all API credentials from settings.db.
+ * Used when credentials are detected as expired/invalid.
+ */
+function clearApiCredentials(settingsDb: Database.Database): void {
+  settingsDb.prepare("DELETE FROM api_keys").run();
+}
+
+/**
+ * Check if an error message indicates an authentication failure (401/403).
+ */
+function isAuthError(error: string): boolean {
+  return error.includes("401") || error.includes("403");
+}
+
+/**
  * Get or extract API credentials. Extracts new ones if none exist.
  */
 async function ensureApiCredentials(
@@ -257,6 +272,56 @@ export async function setStoreTool(
       );
 
       if (!result.success) {
+        // Check if this is an auth error (401/403) - credentials may be expired
+        if (isAuthError(result.error)) {
+          // Clear old credentials and try extracting fresh ones
+          clearApiCredentials(settingsDb);
+
+          onProgress?.({
+            phase: "planning",
+            current: 0,
+            total: 0,
+            message: "API credentials expired, extracting fresh credentials...",
+          });
+
+          const freshCredentials = await ensureApiCredentials(settingsDb, extractFn, onProgress);
+          if (!freshCredentials) {
+            return {
+              success: false,
+              storeNumber,
+              refreshed: false,
+              productCount,
+              error: "Failed to extract fresh API credentials after auth error",
+            };
+          }
+
+          // Retry with fresh credentials
+          const retryResult = await refreshCatalogFn(
+            storeDb,
+            freshCredentials.apiKey,
+            freshCredentials.appId,
+            storeNumber,
+            onProgress
+          );
+
+          if (!retryResult.success) {
+            return {
+              success: false,
+              storeNumber,
+              refreshed: false,
+              productCount,
+              error: retryResult.error,
+            };
+          }
+
+          return {
+            success: true,
+            storeNumber,
+            refreshed: true,
+            productCount: getProductCount(storeDb),
+          };
+        }
+
         return {
           success: false,
           storeNumber,

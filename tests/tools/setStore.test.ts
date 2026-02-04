@@ -464,5 +464,246 @@ describe("setStoreTool", () => {
       expect(capturedApiKey).toBe("my-secret-key");
       expect(capturedAppId).toBe("MY_APP_ID");
     });
+
+    it("retries with fresh credentials when refresh fails with 401 auth error", async () => {
+      // Add store to stores.db
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+
+      // Add expired/invalid API credentials to settings.db
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('expired-key', 'OLD_APP', datetime('now'))`);
+
+      // Create empty store database (triggers refresh)
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      const capturedApiKeys: string[] = [];
+      let refreshCallCount = 0;
+
+      const mockRefresh = vi.fn(
+        async (
+          db: Database.Database,
+          apiKey: string,
+          appId: string,
+          storeNumber: string
+        ): Promise<RefreshResult> => {
+          capturedApiKeys.push(apiKey);
+          refreshCallCount++;
+
+          // First call fails with 401 auth error
+          if (refreshCallCount === 1) {
+            return {
+              success: false,
+              productsAdded: 0,
+              categoriesAdded: 0,
+              tagsAdded: 0,
+              error: "Algolia error: 401 Unauthorized",
+            };
+          }
+          // Second call succeeds with new credentials
+          return { success: true, productsAdded: 100, categoriesAdded: 10, tagsAdded: 5 };
+        }
+      );
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      // Mock extractFn that returns new credentials
+      const mockExtract = vi.fn(async () => ({
+        success: true as const,
+        apiKey: "fresh-new-key",
+        appId: "NEW_APP",
+        storeNumber: null,
+        error: null,
+      }));
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+        extractFn: mockExtract,
+      });
+
+      // Should succeed after retry with fresh credentials
+      expect(result.success).toBe(true);
+      expect(result.refreshed).toBe(true);
+
+      // Should have called refresh twice
+      expect(refreshCallCount).toBe(2);
+
+      // First call used old key, second call used fresh key
+      expect(capturedApiKeys).toEqual(["expired-key", "fresh-new-key"]);
+
+      // Extract should have been called once (for the retry)
+      expect(mockExtract).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries with fresh credentials when refresh fails with 403 forbidden error", async () => {
+      // Add store to stores.db
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+
+      // Add invalid API credentials to settings.db
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('bad-key', 'BAD_APP', datetime('now'))`);
+
+      // Create empty store database (triggers refresh)
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      let refreshCallCount = 0;
+
+      const mockRefresh = vi.fn(
+        async (
+          db: Database.Database,
+          apiKey: string,
+          appId: string,
+          storeNumber: string
+        ): Promise<RefreshResult> => {
+          refreshCallCount++;
+          if (refreshCallCount === 1) {
+            return {
+              success: false,
+              productsAdded: 0,
+              categoriesAdded: 0,
+              tagsAdded: 0,
+              error: "Algolia error: 403 Forbidden",
+            };
+          }
+          return { success: true, productsAdded: 100, categoriesAdded: 10, tagsAdded: 5 };
+        }
+      );
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const mockExtract = vi.fn(async () => ({
+        success: true as const,
+        apiKey: "new-key",
+        appId: "NEW_APP",
+        storeNumber: null,
+        error: null,
+      }));
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+        extractFn: mockExtract,
+      });
+
+      expect(result.success).toBe(true);
+      expect(refreshCallCount).toBe(2);
+    });
+
+    it("returns error when retry also fails with auth error", async () => {
+      // Add store to stores.db
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+
+      // Add expired API credentials to settings.db
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('expired-key', 'OLD_APP', datetime('now'))`);
+
+      // Create empty store database (triggers refresh)
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      const mockRefresh = vi.fn(
+        async (): Promise<RefreshResult> => {
+          // Both attempts fail with auth error
+          return {
+            success: false,
+            productsAdded: 0,
+            categoriesAdded: 0,
+            tagsAdded: 0,
+            error: "Algolia error: 401 Unauthorized",
+          };
+        }
+      );
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const mockExtract = vi.fn(async () => ({
+        success: true as const,
+        apiKey: "also-expired-key",
+        appId: "ALSO_BAD_APP",
+        storeNumber: null,
+        error: null,
+      }));
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+        extractFn: mockExtract,
+      });
+
+      // Should fail after retry also fails
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/401/);
+
+      // Should have tried twice (original + retry)
+      expect(mockRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retry on non-auth errors", async () => {
+      // Add store to stores.db
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')`);
+
+      // Add API credentials to settings.db
+      settingsDb.exec(`INSERT INTO api_keys (key, app_id, extracted_at) VALUES ('good-key', 'GOOD_APP', datetime('now'))`);
+
+      // Create empty store database (triggers refresh)
+      const storePath = join(testDir, "stores", "74.db");
+      const storeDb = new Database(storePath);
+      initializeStoreDataSchema(storeDb);
+      storeDb.close();
+
+      const mockRefresh = vi.fn(
+        async (): Promise<RefreshResult> => {
+          // Non-auth error (e.g., network error or 500)
+          return {
+            success: false,
+            productsAdded: 0,
+            categoriesAdded: 0,
+            tagsAdded: 0,
+            error: "Network error: fetch failed",
+          };
+        }
+      );
+
+      const mockOpenStore = vi.fn((dataDir: string, storeNumber: string) => {
+        const path = join(dataDir, "stores", `${storeNumber}.db`);
+        return new Database(path);
+      });
+
+      const mockExtract = vi.fn();
+
+      const result = await setStoreTool(testDir, settingsDb, storesDb, {
+        storeNumber: "74",
+        refreshCatalogFn: mockRefresh,
+        openStoreDatabaseFn: mockOpenStore,
+        extractFn: mockExtract,
+      });
+
+      // Should fail without retry
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Network error/);
+
+      // Should have only tried once (no retry for non-auth errors)
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+      // Extract should not have been called
+      expect(mockExtract).not.toHaveBeenCalled();
+    });
   });
 });
