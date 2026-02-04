@@ -25,6 +25,21 @@ An MCP server that provides Claude with queryable access to Wegmans product inve
 
 **Multi-Store Support:** No default store. Store is required on all search operations. Data is normalized so product metadata is shared, but prices/aisles are store-specific.
 
+### Context & References
+
+**Primary user's store:** Geneva, NY (used for testing and development)
+
+**Reference implementation:** `wegmans-shopping-ref/` submodule contains a Python/Playwright implementation we studied. Useful for:
+- Comparing captured Algolia responses against historical data
+- Understanding the browser interception approach
+- Sample data in `data/reference/raleigh_products.json` and `algolia_responses.json`
+
+**Algolia query types:** Wegmans uses Algolia for product search. Two query approaches:
+- **Keyword search:** `query: "yogurt"` - matches text in product name, description, category
+- **Faceted/filtered search:** `filters: "categoryNodes.lvl1:Dairy"` - returns all products in a category
+
+The `search()` tool's `categoryFilter` parameter uses faceted search, not keyword search. This distinction matters for "browse the Dairy section" vs "search for 'Dairy'".
+
 ## Architecture
 
 ```
