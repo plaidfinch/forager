@@ -23,7 +23,7 @@ import {
 } from "../../src/types/product.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SNAPSHOTS_DIR = join(__dirname, "..", "..", "snapshots");
+const SNAPSHOTS_DIR = join(__dirname, "..", "..", "snapshots", "responses");
 
 // ============================================================================
 // Transform functions (these will eventually live in src/transforms/)

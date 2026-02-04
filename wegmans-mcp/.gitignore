@@ -5,8 +5,13 @@ node_modules/
 dist/
 build/
 
-# Snapshot data (contains API keys and changes over time)
-snapshots/*.json
+# Snapshot data - exploration files contain API keys
+snapshots/exploration-*.json
+snapshots/stores-exploration.json
+snapshots/*.png
+
+# Keep snapshots/responses/ - these are safe to commit
+# !snapshots/responses/
 
 # Environment files
 .env

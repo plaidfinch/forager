@@ -4,7 +4,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SNAPSHOTS_DIR = join(__dirname, "..", "..", "snapshots");
+const SNAPSHOTS_DIR = join(__dirname, "..", "..", "snapshots", "responses");
 
 /**
  * Helper to find response files

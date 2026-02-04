@@ -8,7 +8,7 @@ import {
 } from "../../src/types/algolia.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SNAPSHOTS_DIR = join(__dirname, "..", "..", "snapshots");
+const SNAPSHOTS_DIR = join(__dirname, "..", "..", "snapshots", "responses");
 
 describe("Algolia Zod Schema", () => {
   it("successfully parses all captured multi-query responses", () => {
