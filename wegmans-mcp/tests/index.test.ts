@@ -28,15 +28,16 @@ describe("MCP Server", () => {
   });
 
   describe("TOOL_DEFINITIONS", () => {
-    it("defines 4 tools", () => {
-      expect(TOOL_DEFINITIONS).toHaveLength(4);
+    it("defines 3 tools", () => {
+      expect(TOOL_DEFINITIONS).toHaveLength(3);
     });
 
-    it("defines query tool with sql input", () => {
+    it("defines query tool with sql input and schema in description", () => {
       const queryTool = TOOL_DEFINITIONS.find((t) => t.name === "query");
 
       expect(queryTool).toBeDefined();
       expect(queryTool?.description).toBeDefined();
+      expect(queryTool?.description).toContain("DATABASE SCHEMA:");
       expect(queryTool?.inputSchema).toEqual({
         type: "object",
         properties: {
@@ -46,16 +47,16 @@ describe("MCP Server", () => {
       });
     });
 
-    it("defines schema tool with no required input", () => {
-      const schemaTool = TOOL_DEFINITIONS.find((t) => t.name === "schema");
+    it("defines setStore tool", () => {
+      const setStoreTool = TOOL_DEFINITIONS.find((t) => t.name === "setStore");
+      expect(setStoreTool).toBeDefined();
+      expect(setStoreTool?.description).toContain("Set the active Wegmans store");
+    });
 
-      expect(schemaTool).toBeDefined();
-      expect(schemaTool?.description).toBeDefined();
-      expect(schemaTool?.inputSchema).toEqual({
-        type: "object",
-        properties: {},
-        required: [],
-      });
+    it("defines listStores tool", () => {
+      const listStoresTool = TOOL_DEFINITIONS.find((t) => t.name === "listStores");
+      expect(listStoresTool).toBeDefined();
+      expect(listStoresTool?.description).toContain("List available Wegmans stores");
     });
 
   });

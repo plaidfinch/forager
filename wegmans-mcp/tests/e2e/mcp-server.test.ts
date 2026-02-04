@@ -65,24 +65,25 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
   });
 
   describe("tools/list", () => {
-    it("returns all 4 tools", async () => {
+    it("returns all 3 tools", async () => {
       const result = await client.listTools();
 
-      expect(result.tools).toHaveLength(4);
+      expect(result.tools).toHaveLength(3);
 
       const toolNames = result.tools.map((t) => t.name);
       expect(toolNames).toContain("query");
-      expect(toolNames).toContain("schema");
-      expect(toolNames).toContain("search");
-      expect(toolNames).toContain("refreshApiKey");
+      expect(toolNames).toContain("setStore");
+      expect(toolNames).toContain("listStores");
     });
 
-    it("query tool has correct schema", async () => {
+    it("query tool has correct schema with embedded database schema", async () => {
       const result = await client.listTools();
 
       const queryTool = result.tools.find((t) => t.name === "query");
       expect(queryTool).toBeDefined();
       expect(queryTool?.description).toContain("SQL");
+      expect(queryTool?.description).toContain("DATABASE SCHEMA:");
+      expect(queryTool?.description).toContain("CREATE TABLE");
       expect(queryTool?.inputSchema).toEqual({
         type: "object",
         properties: {
@@ -92,94 +93,40 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       });
     });
 
-    it("schema tool has correct schema", async () => {
+    it("setStore tool has correct schema", async () => {
       const result = await client.listTools();
 
-      const schemaTool = result.tools.find((t) => t.name === "schema");
-      expect(schemaTool).toBeDefined();
-      expect(schemaTool?.description).toContain("schema");
-      expect(schemaTool?.inputSchema).toEqual({
+      const setStoreTool = result.tools.find((t) => t.name === "setStore");
+      expect(setStoreTool).toBeDefined();
+      expect(setStoreTool?.description).toContain("Set the active Wegmans store");
+      expect(setStoreTool?.inputSchema).toEqual({
         type: "object",
-        properties: {},
+        properties: {
+          storeNumber: { type: "string", description: expect.any(String) },
+          forceRefresh: { type: "boolean", description: expect.any(String) },
+        },
+        required: ["storeNumber"],
+      });
+    });
+
+    it("listStores tool has correct schema", async () => {
+      const result = await client.listTools();
+
+      const listStoresTool = result.tools.find((t) => t.name === "listStores");
+      expect(listStoresTool).toBeDefined();
+      expect(listStoresTool?.description).toContain("List available Wegmans stores");
+      expect(listStoresTool?.inputSchema).toEqual({
+        type: "object",
+        properties: {
+          showAll: { type: "boolean", description: expect.any(String) },
+        },
         required: [],
       });
-    });
-
-    it("search tool has correct schema", async () => {
-      const result = await client.listTools();
-
-      const searchTool = result.tools.find((t) => t.name === "search");
-      expect(searchTool).toBeDefined();
-      expect(searchTool?.description).toContain("Search");
-      expect(searchTool?.inputSchema).toEqual({
-        type: "object",
-        properties: {
-          query: { type: "string", description: expect.any(String) },
-          storeNumber: { type: "string", description: expect.any(String) },
-          hitsPerPage: { type: "number", description: expect.any(String) },
-        },
-        required: ["query", "storeNumber"],
-      });
-    });
-
-    it("refreshApiKey tool has correct schema", async () => {
-      const result = await client.listTools();
-
-      const refreshTool = result.tools.find((t) => t.name === "refreshApiKey");
-      expect(refreshTool).toBeDefined();
-      expect(refreshTool?.description).toContain("API key");
-      expect(refreshTool?.inputSchema).toEqual({
-        type: "object",
-        properties: {
-          storeName: { type: "string", description: expect.any(String) },
-        },
-        required: ["storeName"],
-      });
-    });
-  });
-
-  describe("schema tool", () => {
-    it("returns table DDL via MCP protocol", async () => {
-      const result = await client.callTool({ name: "schema", arguments: {} });
-
-      expect(result.content).toHaveLength(1);
-      expect(result.content[0]).toHaveProperty("type", "text");
-
-      const response = JSON.parse((result.content[0] as { text: string }).text);
-
-      expect(response.success).toBe(true);
-      expect(response.tables).toBeDefined();
-      expect(Array.isArray(response.tables)).toBe(true);
-      expect(response.tables.length).toBe(6);
-
-      // Verify key tables are present
-      const tableNames = response.tables.map((t: { name: string }) => t.name);
-      expect(tableNames).toContain("products");
-      expect(tableNames).toContain("store_products");
-      expect(tableNames).toContain("stores");
-      expect(tableNames).toContain("api_keys");
-    });
-
-    it("DDL includes CREATE TABLE statements", async () => {
-      const result = await client.callTool({ name: "schema", arguments: {} });
-      const response = JSON.parse((result.content[0] as { text: string }).text);
-
-      expect(response.success).toBe(true);
-
-      for (const table of response.tables) {
-        expect(table.name).toBeDefined();
-        expect(table.ddl).toBeDefined();
-        expect(table.ddl).toContain("CREATE TABLE");
-      }
     });
   });
 
   describe("query tool", () => {
     it("executes SELECT query via MCP protocol", async () => {
-      // First insert test data using query (which should fail since it's read-only)
-      // Instead, we'll use schema to verify the database is accessible
-      // then query an empty table
-
       const result = await client.callTool({
         name: "query",
         arguments: { sql: "SELECT COUNT(*) as count FROM products" },
@@ -241,37 +188,40 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
     });
   });
 
-  describe("search tool", () => {
-    it("returns error when no API key exists", async () => {
+  describe("listStores tool", () => {
+    it("returns known Wegmans stores with showAll=true", async () => {
       const result = await client.callTool({
-        name: "search",
-        arguments: { query: "milk", storeNumber: "74" },
+        name: "listStores",
+        arguments: { showAll: true },
       });
 
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
-      expect(response.success).toBe(false);
-      expect(response.error).toContain("API key");
+      expect(response.success).toBe(true);
+      expect(response.stores).toBeDefined();
+      expect(Array.isArray(response.stores)).toBe(true);
+      expect(response.stores.length).toBeGreaterThan(50); // ~75 known stores
     });
 
-    it("validates required parameters", async () => {
+    it("returns known stores with showAll=false when no stores in DB (fallback)", async () => {
+      // When DB is empty, showAll=false still returns known stores as fallback
       const result = await client.callTool({
-        name: "search",
-        arguments: { query: "milk" }, // Missing storeNumber
+        name: "listStores",
+        arguments: { showAll: false },
       });
 
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
-      expect(response.success).toBe(false);
-      expect(response.error).toContain("Missing required parameters");
+      expect(response.success).toBe(true);
+      expect(response.stores.length).toBeGreaterThan(50); // ~75 known stores
     });
   });
 
-  describe("refreshApiKey tool", () => {
+  describe("setStore tool", () => {
     it("validates required parameters", async () => {
       const result = await client.callTool({
-        name: "refreshApiKey",
-        arguments: {}, // Missing storeName
+        name: "setStore",
+        arguments: {}, // Missing storeNumber
       });
 
       const response = JSON.parse((result.content[0] as { text: string }).text);

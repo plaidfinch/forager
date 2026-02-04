@@ -1,11 +1,10 @@
 /**
  * MCP Server Entry Point for Wegmans Product Data.
  *
- * Provides 4 tools for interacting with Wegmans product data:
+ * Provides 3 tools for interacting with Wegmans product data:
  * - listStores: List available Wegmans stores
  * - setStore: Select a store and fetch its catalog
- * - schema: Get table DDL for understanding the database structure
- * - query: Execute read-only SQL queries against the database
+ * - query: Execute read-only SQL queries (schema is embedded in tool description)
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -26,78 +25,116 @@ import {
   getDatabase,
 } from "./db/connection.js";
 import { queryTool } from "./tools/query.js";
-import { schemaTool } from "./tools/schema.js";
+import { schemaTool, type SchemaToolResultExtended } from "./tools/schema.js";
 import { setStoreTool, getActiveStore } from "./tools/setStore.js";
 import { listStoresTool } from "./tools/listStores.js";
 import { getCatalogStatus, type FetchProgress } from "./catalog/index.js";
 
 /**
- * Tool definitions for the MCP server.
+ * Format schema result as a string for embedding in tool description.
  */
-export const TOOL_DEFINITIONS = [
-  {
-    name: "query",
-    description:
-      "Execute a read-only SQL query against the Wegmans product database. Use this to search, filter, and analyze product data.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        sql: {
-          type: "string",
-          description: "The SQL SELECT statement to execute",
+function formatSchemaForDescription(schemaResult: SchemaToolResultExtended): string {
+  if (!schemaResult.success || !schemaResult.tables) {
+    return "Schema not available - use setStore first to initialize the database.";
+  }
+
+  const parts: string[] = [];
+
+  // Add tables
+  if (schemaResult.tables && schemaResult.tables.length > 0) {
+    parts.push("=== Tables ===");
+    for (const table of schemaResult.tables) {
+      parts.push(table.ddl + ";");
+    }
+  }
+
+  // Add views
+  if (schemaResult.views && schemaResult.views.length > 0) {
+    parts.push("\n=== Views ===");
+    for (const view of schemaResult.views) {
+      parts.push(view.ddl + ";");
+    }
+  }
+
+  return parts.join("\n");
+}
+
+/**
+ * Generate tool definitions with the current database schema embedded.
+ *
+ * @param db - Optional database connection. If provided, schema is embedded in query tool description.
+ * @returns Array of tool definitions
+ */
+export function getToolDefinitions(db?: Database.Database) {
+  // Get schema if database is available
+  let schemaText = "Database not initialized. Use setStore first.";
+  if (db) {
+    const schemaResult = schemaTool(db);
+    schemaText = formatSchemaForDescription(schemaResult);
+  }
+
+  return [
+    {
+      name: "query",
+      description: `Execute a read-only SQL query against the Wegmans product database. Use this to search, filter, and analyze product data.
+
+DATABASE SCHEMA:
+${schemaText}`,
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          sql: {
+            type: "string",
+            description: "The SQL SELECT statement to execute",
+          },
         },
+        required: ["sql"],
       },
-      required: ["sql"],
     },
-  },
-  {
-    name: "schema",
-    description:
-      "Get the database schema (CREATE TABLE/VIEW statements) to understand available tables and columns. Includes categories/tags ontology tables and views for querying product taxonomy. Use product_tags view to join products with their filter/popular tags.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
-      required: [] as string[],
-    },
-  },
-  {
-    name: "setStore",
-    description:
-      "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        storeNumber: {
-          type: "string",
-          description:
-            "Wegmans store number (e.g., '74' for Geneva, NY). Use listStores to find store numbers.",
+    {
+      name: "setStore",
+      description:
+        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          storeNumber: {
+            type: "string",
+            description:
+              "Wegmans store number (e.g., '74' for Geneva, NY). Use listStores to find store numbers.",
+          },
+          forceRefresh: {
+            type: "boolean",
+            description:
+              "Force a full catalog refresh even if data exists (default: false)",
+          },
         },
-        forceRefresh: {
-          type: "boolean",
-          description:
-            "Force a full catalog refresh even if data exists (default: false)",
-        },
+        required: ["storeNumber"],
       },
-      required: ["storeNumber"],
     },
-  },
-  {
-    name: "listStores",
-    description:
-      "List available Wegmans stores with their store numbers. Use this to find the store number for setStore.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        showAll: {
-          type: "boolean",
-          description:
-            "If true, show all known stores. If false, only show stores in local database (default: true)",
+    {
+      name: "listStores",
+      description:
+        "List available Wegmans stores with their store numbers. Use this to find the store number for setStore.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          showAll: {
+            type: "boolean",
+            description:
+              "If true, show all known stores. If false, only show stores in local database (default: true)",
+          },
         },
+        required: [] as string[],
       },
-      required: [] as string[],
     },
-  },
-];
+  ];
+}
+
+/**
+ * Static tool definitions for testing (without database).
+ */
+export const TOOL_DEFINITIONS = getToolDefinitions();
 
 /**
  * Create and configure the MCP server with tool handlers.
@@ -115,10 +152,16 @@ export function createServer(): Server {
     }
   );
 
-  // Register tool listing handler
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS,
-  }));
+  // Register tool listing handler - dynamically generates schema in query tool description
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    try {
+      const { db } = getDatabase();
+      return { tools: getToolDefinitions(db) };
+    } catch {
+      // Database not initialized yet
+      return { tools: getToolDefinitions() };
+    }
+  });
 
   // Register tool call handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -138,13 +181,6 @@ export function createServer(): Server {
             };
           }
           const result = queryTool(readonlyDb, sql);
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-          };
-        }
-
-        case "schema": {
-          const result = schemaTool(db);
           return {
             content: [{ type: "text", text: JSON.stringify(result) }],
           };
