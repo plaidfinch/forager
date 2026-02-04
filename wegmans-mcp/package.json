@@ -3,8 +3,13 @@
   "version": "0.1.0",
   "description": "MCP server for querying Wegmans product data",
   "type": "module",
+  "main": "dist/src/index.js",
+  "bin": {
+    "wegmans-mcp": "dist/src/index.js"
+  },
   "scripts": {
     "build": "tsc",
+    "start": "node dist/src/index.js",
     "explore": "npx tsx scripts/explore-api.ts",
     "explore:stores": "npx tsx scripts/explore-stores.ts",
     "test": "vitest run",
@@ -15,6 +20,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3",
     "better-sqlite3": "^12.6.2",
     "playwright": "^1.58.1",
     "typescript": "^5.9.3",
