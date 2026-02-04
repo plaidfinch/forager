@@ -1,17 +1,29 @@
 /**
  * Set store tool for selecting the active Wegmans store.
  *
+ * Multi-database architecture:
+ * - settings.db: API keys and active_store setting
+ * - stores.db: Store locations
+ * - stores/{storeNumber}.db: Per-store products
+ *
  * Sets the active store and triggers a catalog refresh if needed.
  * Automatically handles API key extraction if needed.
  */
 
 import type Database from "better-sqlite3";
+import DatabaseImpl from "better-sqlite3";
+import { join } from "node:path";
 import {
   getCatalogStatus,
   refreshCatalog,
   type FetchProgress,
+  type RefreshResult,
 } from "../catalog/index.js";
-import { extractAlgoliaKey } from "../algolia/keyExtractor.js";
+import {
+  extractAlgoliaKey,
+  type KeyExtractionResult,
+} from "../algolia/keyExtractor.js";
+import { initializeStoreDataSchema } from "../db/schema.js";
 
 export interface SetStoreOptions {
   /** Store number to set as active */
@@ -20,6 +32,18 @@ export interface SetStoreOptions {
   forceRefresh?: boolean;
   /** Progress callback */
   onProgress?: (progress: FetchProgress) => void;
+  /** Injectable refresh function for testing */
+  refreshCatalogFn?: (
+    db: Database.Database,
+    apiKey: string,
+    appId: string,
+    storeNumber: string,
+    onProgress?: (progress: FetchProgress) => void
+  ) => Promise<RefreshResult>;
+  /** Injectable store database opener for testing */
+  openStoreDatabaseFn?: (dataDir: string, storeNumber: string) => Database.Database;
+  /** Injectable extract function for testing */
+  extractFn?: () => Promise<KeyExtractionResult>;
 }
 
 export type SetStoreResult =
@@ -38,47 +62,42 @@ export type SetStoreResult =
     };
 
 /**
- * Get the currently active store number.
+ * Get the currently active store number from settings.db.
  */
-export function getActiveStore(db: Database.Database): string | null {
-  const row = db
+export function getActiveStore(settingsDb: Database.Database): string | null {
+  const row = settingsDb
     .prepare("SELECT value FROM settings WHERE key = 'active_store'")
     .get() as { value: string } | undefined;
   return row?.value ?? null;
 }
 
 /**
- * Set the active store number.
+ * Set the active store number in settings.db.
  */
-function setActiveStore(db: Database.Database, storeNumber: string): void {
-  db.prepare(
+function setActiveStore(settingsDb: Database.Database, storeNumber: string): void {
+  settingsDb.prepare(
     "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_store', ?)"
   ).run(storeNumber);
 }
 
 /**
- * Ensure a store exists in the stores table.
+ * Check if a store exists in stores.db.
  */
-function ensureStoreExists(db: Database.Database, storeNumber: string): void {
-  const exists = db
+function storeExists(storesDb: Database.Database, storeNumber: string): boolean {
+  const exists = storesDb
     .prepare("SELECT 1 FROM stores WHERE store_number = ?")
     .get(storeNumber);
-
-  if (!exists) {
-    // Insert minimal store record - will be updated with full info later if available
-    db.prepare(
-      "INSERT INTO stores (store_number, name) VALUES (?, ?)"
-    ).run(storeNumber, `Store ${storeNumber}`);
-  }
+  return !!exists;
 }
 
 /**
- * Get product count for a specific store.
+ * Get product count from the store database.
+ * With per-store databases, no store_number filter is needed.
  */
-function getStoreProductCount(db: Database.Database, storeNumber: string): number {
-  const row = db
-    .prepare("SELECT COUNT(*) as count FROM store_products WHERE store_number = ?")
-    .get(storeNumber) as { count: number };
+function getProductCount(storeDb: Database.Database): number {
+  const row = storeDb
+    .prepare("SELECT COUNT(*) as count FROM products")
+    .get() as { count: number };
   return row.count;
 }
 
@@ -88,20 +107,20 @@ interface ApiCredentials {
 }
 
 /**
- * Get the most recent API credentials from the database.
+ * Get the most recent API credentials from settings.db.
  */
-function getApiCredentials(db: Database.Database): ApiCredentials | null {
-  const row = db
+function getApiCredentials(settingsDb: Database.Database): ApiCredentials | null {
+  const row = settingsDb
     .prepare("SELECT key, app_id FROM api_keys ORDER BY id DESC LIMIT 1")
     .get() as { key: string; app_id: string } | undefined;
   return row ? { apiKey: row.key, appId: row.app_id } : null;
 }
 
 /**
- * Store an API key in the database.
+ * Store an API key in settings.db.
  */
-function storeApiKey(db: Database.Database, apiKey: string, appId: string): void {
-  db.prepare(
+function storeApiKey(settingsDb: Database.Database, apiKey: string, appId: string): void {
+  settingsDb.prepare(
     "INSERT INTO api_keys (key, app_id, extracted_at) VALUES (?, ?, ?)"
   ).run(apiKey, appId, new Date().toISOString());
 }
@@ -110,11 +129,12 @@ function storeApiKey(db: Database.Database, apiKey: string, appId: string): void
  * Get or extract API credentials. Extracts new ones if none exist.
  */
 async function ensureApiCredentials(
-  db: Database.Database,
+  settingsDb: Database.Database,
+  extractFn?: () => Promise<KeyExtractionResult>,
   onProgress?: (progress: FetchProgress) => void
 ): Promise<ApiCredentials | null> {
   // Try existing credentials first
-  const existing = getApiCredentials(db);
+  const existing = getApiCredentials(settingsDb);
   if (existing) {
     return existing;
   }
@@ -127,14 +147,15 @@ async function ensureApiCredentials(
     message: "Extracting API credentials from Wegmans website...",
   });
 
-  const result = await extractAlgoliaKey({ headless: true, timeout: 60000 });
+  const extract = extractFn ?? (() => extractAlgoliaKey({ headless: true, timeout: 60000 }));
+  const result = await extract();
 
   if (!result.success || !result.apiKey || !result.appId) {
     return null;
   }
 
   // Store the credentials
-  storeApiKey(db, result.apiKey, result.appId);
+  storeApiKey(settingsDb, result.apiKey, result.appId);
 
   onProgress?.({
     phase: "planning",
@@ -147,46 +168,88 @@ async function ensureApiCredentials(
 }
 
 /**
+ * Default implementation for opening a store database.
+ */
+function defaultOpenStoreDatabase(dataDir: string, storeNumber: string): Database.Database {
+  const storePath = join(dataDir, "stores", `${storeNumber}.db`);
+  const storeDb = new DatabaseImpl(storePath);
+  storeDb.pragma("foreign_keys = ON");
+  initializeStoreDataSchema(storeDb);
+  return storeDb;
+}
+
+/**
  * Set the active store and optionally refresh the catalog.
  * Automatically extracts API key if needed.
  *
- * @param db - Database connection
+ * Multi-database architecture:
+ * - Validates store exists in stores.db
+ * - Opens store-specific database (stores/{storeNumber}.db)
+ * - Stores active_store in settings.db
+ * - Gets API credentials from settings.db
+ * - Refreshes catalog against store database
+ *
+ * @param dataDir - Base directory for all database files
+ * @param settingsDb - Settings database connection
+ * @param storesDb - Stores database connection
  * @param options - Set store options
  * @returns Result with success status
  */
 export async function setStoreTool(
-  db: Database.Database,
+  dataDir: string,
+  settingsDb: Database.Database,
+  storesDb: Database.Database,
   options: SetStoreOptions
 ): Promise<SetStoreResult> {
-  const { storeNumber, forceRefresh = false, onProgress } = options;
+  const {
+    storeNumber,
+    forceRefresh = false,
+    onProgress,
+    refreshCatalogFn = refreshCatalog,
+    openStoreDatabaseFn = defaultOpenStoreDatabase,
+    extractFn,
+  } = options;
+
+  let storeDb: Database.Database | null = null;
 
   try {
-    // Ensure store exists in database
-    ensureStoreExists(db, storeNumber);
+    // Validate store exists in stores.db
+    if (!storeExists(storesDb, storeNumber)) {
+      return {
+        success: false,
+        storeNumber,
+        refreshed: false,
+        productCount: 0,
+        error: `Store ${storeNumber} not found in stores database`,
+      };
+    }
 
-    // Set as active store
-    setActiveStore(db, storeNumber);
+    // Open store-specific database
+    storeDb = openStoreDatabaseFn(dataDir, storeNumber);
+
+    // Set as active store in settings.db
+    setActiveStore(settingsDb, storeNumber);
 
     // Check if catalog needs refresh for this store
-    const status = getCatalogStatus(db);
-    const storeProductCount = getStoreProductCount(db, storeNumber);
-    const needsRefresh = forceRefresh || storeProductCount === 0 || status.isStale;
+    const status = getCatalogStatus(storeDb);
+    const productCount = getProductCount(storeDb);
+    const needsRefresh = forceRefresh || productCount === 0 || status.isStale;
 
     if (needsRefresh) {
-      // Get or extract API credentials
-      const credentials = await ensureApiCredentials(db, onProgress);
+      // Get or extract API credentials from settings.db
+      const credentials = await ensureApiCredentials(settingsDb, extractFn, onProgress);
       if (!credentials) {
         return {
           success: false,
           storeNumber,
           refreshed: false,
-          productCount: storeProductCount,
+          productCount,
           error: "Failed to extract API credentials from Wegmans website",
         };
       }
 
-      const result = await refreshCatalog(
-        db,
+      const result = await refreshCatalogFn(
+        storeDb,
         credentials.apiKey,
         credentials.appId,
         storeNumber,
@@ -198,7 +261,7 @@ export async function setStoreTool(
           success: false,
           storeNumber,
           refreshed: false,
-          productCount: storeProductCount,
+          productCount,
           error: result.error,
         };
       }
@@ -207,7 +270,7 @@ export async function setStoreTool(
         success: true,
         storeNumber,
         refreshed: true,
-        productCount: getStoreProductCount(db, storeNumber),
+        productCount: getProductCount(storeDb),
       };
     }
 
@@ -215,7 +278,7 @@ export async function setStoreTool(
       success: true,
       storeNumber,
       refreshed: false,
-      productCount: storeProductCount,
+      productCount,
     };
   } catch (err) {
     return {
@@ -225,5 +288,12 @@ export async function setStoreTool(
       productCount: 0,
       error: err instanceof Error ? err.message : String(err),
     };
+  } finally {
+    // Close store database if we opened it
+    // Note: In production, the caller may want to keep this open
+    // For now, we close it to avoid leaking connections in tests
+    if (storeDb) {
+      storeDb.close();
+    }
   }
 }
