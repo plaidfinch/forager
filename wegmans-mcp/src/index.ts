@@ -29,6 +29,11 @@ import { queryTool } from "./tools/query.js";
 import { schemaTool } from "./tools/schema.js";
 import { searchTool } from "./tools/search.js";
 import { refreshApiKeyTool } from "./tools/refreshApiKey.js";
+import {
+  getCatalogStatus,
+  refreshCatalogIfNeeded,
+  type FetchProgress,
+} from "./catalog/index.js";
 
 /**
  * Tool definitions for the MCP server.
@@ -300,16 +305,105 @@ function ensureDataDir(dbPath: string): void {
 }
 
 /**
+ * Default store number (Geneva, NY).
+ * Can be overridden with WEGMANS_STORE_NUMBER env var.
+ */
+const DEFAULT_STORE_NUMBER = "74";
+
+/**
+ * Log to stderr (since stdout is used for MCP JSON-RPC).
+ */
+function log(message: string): void {
+  process.stderr.write(`[wegmans-mcp] ${message}\n`);
+}
+
+/**
+ * Check catalog freshness and refresh if needed.
+ * - Blocks on first population (empty catalog)
+ * - Refreshes in background when stale (non-blocking)
+ *
+ * @param db - Database connection
+ * @param storeNumber - Store number to fetch
+ */
+async function ensureFreshCatalog(
+  db: Database.Database,
+  storeNumber: string
+): Promise<void> {
+  const status = getCatalogStatus(db);
+
+  if (!status.isEmpty && !status.isStale) {
+    log(
+      `Catalog OK: ${status.productCount} products, last updated ${status.lastUpdated?.toISOString()}`
+    );
+    return;
+  }
+
+  // Need API key to refresh
+  const apiKey = getApiKeyFromDatabase(db);
+  if (!apiKey) {
+    if (status.isEmpty) {
+      log("Warning: Catalog empty but no API key available. Use refreshApiKey tool first.");
+    } else {
+      log(
+        `Warning: Catalog stale (${status.productCount} products from ${status.lastUpdated?.toISOString()}) but no API key. Use refreshApiKey tool to update.`
+      );
+    }
+    return;
+  }
+
+  const onProgress = (progress: FetchProgress) => {
+    log(`  ${progress.message}`);
+  };
+
+  const doRefresh = async () => {
+    const result = await refreshCatalogIfNeeded(db, apiKey, storeNumber, onProgress);
+
+    if (result) {
+      if (result.success) {
+        log(
+          `Catalog refreshed: ${result.productsAdded} products, ${result.categoriesAdded} categories, ${result.tagsAdded} tags`
+        );
+      } else {
+        log(`Warning: Catalog refresh failed: ${result.error}`);
+      }
+    }
+  };
+
+  if (status.isEmpty) {
+    // Block on first population - server isn't useful without data
+    log("Catalog empty, fetching full catalog (blocking)...");
+    await doRefresh();
+  } else {
+    // Background refresh when stale - don't block server startup
+    log(
+      `Catalog stale (last updated ${status.lastUpdated?.toISOString()}), refreshing in background...`
+    );
+    doRefresh().catch((err) => {
+      log(`Warning: Background catalog refresh failed: ${err instanceof Error ? err.message : err}`);
+    });
+  }
+}
+
+/**
  * Main entry point - starts the MCP server.
  */
 async function main(): Promise<void> {
   const dbPath = getDefaultDbPath();
+  const storeNumber = process.env["WEGMANS_STORE_NUMBER"] ?? DEFAULT_STORE_NUMBER;
 
   // Ensure data directory exists
   ensureDataDir(dbPath);
 
   // Open database connection
   openDatabase(dbPath);
+  const { db } = getDatabase();
+
+  // Check catalog freshness and refresh if needed
+  try {
+    await ensureFreshCatalog(db, storeNumber);
+  } catch (err) {
+    log(`Warning: Catalog check failed: ${err instanceof Error ? err.message : err}`);
+  }
 
   // Create and start server
   const server = createServer();
