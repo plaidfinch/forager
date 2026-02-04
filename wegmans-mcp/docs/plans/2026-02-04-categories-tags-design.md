@@ -26,9 +26,15 @@ List available Wegmans stores with their store numbers.
 
 ```typescript
 interface ListStoresParams {
-  showAll?: boolean;  // default: true, shows all ~75 known stores
+  showAll?: boolean;  // default: true
 }
 ```
+
+Fetches from `https://www.wegmans.com/api/stores` with 24h caching:
+- `showAll=true` (default): Returns all stores, fetching from API if cache is stale
+- `showAll=false`: Returns only cached stores without fetching
+
+Returns ~114 stores with full details (address, coordinates, services).
 
 ### `setStore`
 Set the active store and fetch its catalog. Call this first.
@@ -282,10 +288,11 @@ WHERE p.name LIKE '%milk%'
 - [x] setStore/listStores tools
 - [x] Schema embedded in query tool description
 - [x] TypeScript strict mode compliance (discriminated unions)
+- [x] Dynamic store list fetching with 24h cache
 - [x] Tests passing (197 tests)
 
 ## Context & References
 
 - Algolia API: Products indexed at `QGPPR19V8V-dsn.algolia.net`
 - Facets: `categories.lvl0-4`, `filterTags`, `popularTags`
-- Store list: ~75 stores across NY, PA, NJ, MD, VA, MA, NC
+- Store API: `https://www.wegmans.com/api/stores` (~114 stores)
