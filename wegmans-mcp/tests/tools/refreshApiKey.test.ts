@@ -44,17 +44,15 @@ describe("refreshApiKeyTool", () => {
       success: true,
       apiKey: "test-api-key-12345",
       appId: "TEST_APP_ID",
-      storeNumber: "74",
+      storeNumber: null,
     });
 
     const result = await refreshApiKeyTool(db, {
-      storeName: "Geneva, NY",
       extractFn: mockExtractFn,
     });
 
     expect(result.success).toBe(true);
     expect(result.apiKey).toBe("test-api-key-12345");
-    expect(result.storeNumber).toBe("74");
     expect(result.error).toBeUndefined();
 
     // Verify key was stored in database
@@ -77,13 +75,11 @@ describe("refreshApiKeyTool", () => {
     });
 
     const result = await refreshApiKeyTool(db, {
-      storeName: "Invalid Store",
       extractFn: mockExtractFn,
     });
 
     expect(result.success).toBe(false);
     expect(result.apiKey).toBeUndefined();
-    expect(result.storeNumber).toBeUndefined();
     expect(result.error).toBe("Failed to capture Algolia API key from requests");
 
     // Verify no key was stored in database

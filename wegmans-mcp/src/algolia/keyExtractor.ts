@@ -84,12 +84,10 @@ function parseStoreNumberFromRequest(
  * Extract Algolia credentials by loading the Wegmans website and
  * intercepting Algolia API requests.
  *
- * @param storeName - Store name/location to search for (e.g., "Geneva, NY")
  * @param options - Configuration options
  * @returns Extraction result with API key, app ID, and store number
  */
 export async function extractAlgoliaKey(
-  _storeName: string,
   options: {
     headless?: boolean;
     timeout?: number;

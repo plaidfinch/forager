@@ -81,7 +81,7 @@ describe("MCP Server", () => {
       });
     });
 
-    it("defines refreshApiKey tool with storeName input", () => {
+    it("defines refreshApiKey tool with no required input", () => {
       const refreshTool = TOOL_DEFINITIONS.find(
         (t) => t.name === "refreshApiKey"
       );
@@ -90,10 +90,8 @@ describe("MCP Server", () => {
       expect(refreshTool?.description).toBeDefined();
       expect(refreshTool?.inputSchema).toEqual({
         type: "object",
-        properties: {
-          storeName: { type: "string", description: expect.any(String) },
-        },
-        required: ["storeName"],
+        properties: {},
+        required: [],
       });
     });
   });

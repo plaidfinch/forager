@@ -93,17 +93,11 @@ export const TOOL_DEFINITIONS = [
   {
     name: "refreshApiKey",
     description:
-      "Extract a fresh Algolia API key from the Wegmans website. Use this when search fails due to an expired key.",
+      "Extract a fresh Algolia API key from the Wegmans website. Use this first before other tools, or when search fails due to an expired key.",
     inputSchema: {
       type: "object" as const,
-      properties: {
-        storeName: {
-          type: "string",
-          description:
-            "Store name for URL (e.g., 'geneva' becomes wegmans.com/stores/geneva)",
-        },
-      },
-      required: ["storeName"],
+      properties: {},
+      required: [] as string[],
     },
   },
   {
@@ -266,22 +260,7 @@ export function createServer(): Server {
         }
 
         case "refreshApiKey": {
-          const storeName = (args as { storeName?: string }).storeName;
-          if (typeof storeName !== "string") {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    success: false,
-                    error: "Missing required parameter: storeName",
-                  }),
-                },
-              ],
-            };
-          }
-
-          const result = await refreshApiKeyTool(db, { storeName });
+          const result = await refreshApiKeyTool(db);
           return {
             content: [{ type: "text", text: JSON.stringify(result) }],
           };

@@ -12,11 +12,9 @@ import {
 } from "../algolia/keyExtractor.js";
 
 export interface RefreshApiKeyOptions {
-  storeName: string;
   headless?: boolean;
   timeout?: number;
   extractFn?: (
-    storeName: string,
     options: { headless?: boolean; timeout?: number }
   ) => Promise<KeyExtractionResult>;
 }
@@ -24,7 +22,6 @@ export interface RefreshApiKeyOptions {
 export interface RefreshApiKeyResult {
   success: boolean;
   apiKey?: string;
-  storeNumber?: string;
   error?: string;
 }
 
@@ -32,22 +29,21 @@ export interface RefreshApiKeyResult {
  * Extract a fresh API key and store it in the database.
  *
  * @param db - Database connection for storing the key
- * @param options - Configuration options including storeName and optional extractFn for testing
- * @returns Result with apiKey and storeNumber on success, or error on failure
+ * @param options - Configuration options
+ * @returns Result with apiKey on success, or error on failure
  */
 export async function refreshApiKeyTool(
   db: Database.Database,
-  options: RefreshApiKeyOptions
+  options: RefreshApiKeyOptions = {}
 ): Promise<RefreshApiKeyResult> {
   const {
-    storeName,
     headless = true,
     timeout = 60000,
     extractFn = extractAlgoliaKey,
   } = options;
 
   // Extract key using provided function (or default extractAlgoliaKey)
-  const extraction = await extractFn(storeName, { headless, timeout });
+  const extraction = await extractFn({ headless, timeout });
 
   if (!extraction.success || !extraction.apiKey) {
     return {
@@ -71,6 +67,5 @@ export async function refreshApiKeyTool(
   return {
     success: true,
     apiKey: extraction.apiKey,
-    ...(extraction.storeNumber && { storeNumber: extraction.storeNumber }),
   };
 }
