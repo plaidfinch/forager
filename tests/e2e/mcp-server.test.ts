@@ -20,7 +20,20 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
-// Skip in CI - these spawn processes and may have platform-specific behavior
+/**
+ * Skip E2E tests in CI environments.
+ *
+ * Reasons for skipping:
+ * 1. Process spawning - These tests spawn the MCP server as a child process,
+ *    which can behave differently across CI platforms (GitHub Actions, etc.)
+ * 2. Network dependencies - Tests may hit the real Wegmans API for stores data
+ * 3. Playwright/browser - Key extraction requires Chromium, which needs
+ *    additional CI setup (playwright install-deps)
+ * 4. Timing sensitivity - Stdio communication can have race conditions in CI
+ *
+ * To run locally: npm test -- tests/e2e/mcp-server.test.ts
+ * To force skip: SKIP_INTEGRATION=true npm test
+ */
 const SKIP_INTEGRATION =
   process.env.CI === "true" || process.env.SKIP_INTEGRATION === "true";
 
