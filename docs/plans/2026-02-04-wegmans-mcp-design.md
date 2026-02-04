@@ -5,7 +5,7 @@
 
 > **Note:** This document contains the original design proposal. The actual implementation
 > differs significantly - see the "Current Architecture" section and
-> [wegmans-mcp/docs/architecture.md](../../wegmans-mcp/docs/architecture.md) for details.
+> [docs/architecture.md](../architecture.md) for details.
 
 ## Overview
 
@@ -471,7 +471,7 @@ These were validated during implementation:
 
 # Current Architecture (Implemented)
 
-> **See also:** [wegmans-mcp/docs/architecture.md](../../wegmans-mcp/docs/architecture.md) for full details.
+> **See also:** [docs/architecture.md](../architecture.md) for full details.
 
 The implementation differs from the original design in several key ways:
 
@@ -482,7 +482,7 @@ The implementation differs from the original design in several key ways:
 Instead of a single database with `store_products` junction table:
 
 ```
-~/.local/share/wegmans-mcp/    # XDG-compliant (not ~/.config/)
+~/.local/share/forager/    # XDG-compliant (not ~/.config/)
   settings.db        # API keys, active store setting
   stores.db          # Store locations
   stores/

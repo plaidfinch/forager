@@ -1,4 +1,4 @@
-# Wegmans MCP Server Architecture
+# Forager Architecture
 
 ## Overview
 
@@ -7,7 +7,7 @@ The server uses a **per-store database architecture** where each Wegmans store h
 ## Database Structure
 
 ```
-$XDG_DATA_HOME/wegmans-mcp/    # defaults to ~/.local/share/wegmans-mcp/
+$XDG_DATA_HOME/forager/    # defaults to ~/.local/share/forager/
   settings.db        # Global settings and API credentials
   stores.db          # Store locations (shared across all stores)
   stores/
@@ -255,7 +255,7 @@ The `schemaTool` function extracts DDL from SQLite's `sqlite_master` table, so C
                                              │ MCP Protocol
                                              ▼
 ┌────────────────────────────────────────────────────────────────┐
-│                     Wegmans MCP Server                          │
+│                        Forager Server                           │
 │                                                                 │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐ │
 │  │    query    │    │  setStore   │    │   ListTools         │ │
@@ -277,12 +277,6 @@ The `schemaTool` function extracts DDL from SQLite's `sqlite_master` table, so C
    └────────────┘    └────────────┘          └────────────┘
 ```
 
-## Migration from Single Database
+## Data Location
 
-The previous architecture used a single `data.db` file with a `store_products` table. The new architecture ignores the old file - users can delete it manually:
-
-```bash
-rm ~/.wegmans-mcp/data.db  # Old location, no longer used
-```
-
-New data location: `~/.local/share/wegmans-mcp/`
+Data is stored at `~/.local/share/forager/` (or `$XDG_DATA_HOME/forager/` if set).
