@@ -43,7 +43,7 @@ server.stdout.on("data", (chunk: Buffer) => {
     const match = header.match(/Content-Length: (\d+)/);
     if (!match) break;
 
-    const length = parseInt(match[1], 10);
+    const length = parseInt(match[1]!, 10);
     const bodyStart = headerEnd + 4;
 
     if (buffer.length < bodyStart + length) break;

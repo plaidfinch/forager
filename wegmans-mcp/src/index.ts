@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * MCP Server Entry Point for Wegmans Product Data.
  *

@@ -7,6 +7,10 @@
   "bin": {
     "wegmans-mcp": "dist/src/index.js"
   },
+  "files": [
+    "dist/src/**/*.js",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/src/index.js",
@@ -23,7 +27,6 @@
     "@modelcontextprotocol/sdk": "^1.25.3",
     "better-sqlite3": "^12.6.2",
     "playwright": "^1.58.1",
-    "typescript": "^5.9.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -31,6 +34,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.2.0",
     "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }
 }

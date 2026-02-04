@@ -26,12 +26,38 @@ npx playwright install chromium
 
 ## Configuration
 
-Add to your Claude Code MCP settings (`~/.claude/settings.json`):
+Add to Claude Code using the CLI:
+
+```bash
+# From the wegmans-mcp directory
+claude mcp add --transport stdio wegmans -- node $PWD/dist/src/index.js
+
+# Or specify the absolute path directly
+claude mcp add --transport stdio wegmans -- node /path/to/wegmans-mcp/dist/src/index.js
+```
+
+To verify it was added:
+
+```bash
+claude mcp list
+claude mcp get wegmans
+```
+
+To remove:
+
+```bash
+claude mcp remove wegmans
+```
+
+### Alternative: Manual Configuration
+
+Add to `~/.claude.json` (or `.mcp.json` for project-scoped):
 
 ```json
 {
   "mcpServers": {
     "wegmans": {
+      "type": "stdio",
       "command": "node",
       "args": ["/path/to/wegmans-mcp/dist/src/index.js"]
     }
@@ -204,9 +230,21 @@ npm test:watch
 # Build
 npm run build
 
+# Link globally for development
+npm link
+claude mcp add --transport stdio wegmans -- wegmans-mcp
+
 # Explore API (debugging)
 npm run explore
 npm run explore:stores
+```
+
+### Windows Users
+
+On native Windows, wrap the command with `cmd /c`:
+
+```bash
+claude mcp add --transport stdio wegmans -- cmd /c node /path/to/wegmans-mcp/dist/src/index.js
 ```
 
 ## Architecture
