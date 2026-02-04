@@ -23,7 +23,7 @@ An MCP server that provides Claude with queryable access to Wegmans product inve
 - Real-time inventory/stock levels
 - Price alerts or tracking over time
 
-**Default Store:** Geneva, NY (configurable)
+**Multi-Store Support:** No default store. Store is required on all search operations. Data is normalized so product metadata is shared, but prices/aisles are store-specific.
 
 ## Architecture
 
@@ -52,25 +52,26 @@ An MCP server that provides Claude with queryable access to Wegmans product inve
 
 ### Data Flow
 
-1. Claude calls `search("greek yogurt")`
+1. Claude calls `search("Geneva, NY", "greek yogurt")`
 2. MCP server checks if Algolia API key is valid
 3. If stale → Playwright spins up, extracts fresh key, exits
-4. HTTP request to Algolia with search query
-5. Results upserted into SQLite
+4. HTTP request to Algolia with search query + store filter
+5. Product metadata upserted into `products`, store-specific data into `store_products`
 6. Returns count to Claude
-7. Claude calls `query("SELECT name, aisle, price FROM products WHERE ...")`
+7. Claude calls `query("SELECT p.name, sp.aisle, sp.price FROM products p JOIN store_products sp ON ... WHERE ...")`
 8. SQL runs against local SQLite, results returned
 
 **Key Insight:** Browser automation is only used for API key extraction, not for every query. Normal operation is direct HTTP to Algolia + local SQLite.
 
 ## MCP Tools
 
-### `search(query?, categoryFilter?)`
+### `search(store, query?, categoryFilter?)`
 
-Search Wegmans and populate local DB.
+Search Wegmans for a specific store and populate local DB.
 
 ```typescript
-search(query?: string, categoryFilter?: string) -> {
+search(store: string, query?: string, categoryFilter?: string) -> {
+  store: string,
   query: string | null,
   category_filter: string | null,
   products_found: number,
@@ -79,13 +80,13 @@ search(query?: string, categoryFilter?: string) -> {
 ```
 
 **Usage patterns:**
-- `search("yogurt")` - keyword search
-- `search(undefined, "Dairy > Yogurt")` - browse category
-- `search("greek", "Dairy > Yogurt")` - keyword within category
+- `search("Geneva, NY", "yogurt")` - keyword search
+- `search("Geneva, NY", undefined, "Dairy > Yogurt")` - browse category
+- `search("Geneva, NY", "greek", "Dairy > Yogurt")` - keyword within category
 
 ### `query(sql)`
 
-Run arbitrary SQL against local DB.
+Run arbitrary SQL against local DB. Can query across stores.
 
 ```typescript
 query(sql: string) -> {
@@ -95,12 +96,30 @@ query(sql: string) -> {
 }
 ```
 
-### `list_categories(level?)`
+**Example queries:**
+```sql
+-- Products at a specific store
+SELECT p.name, sp.price, sp.aisle
+FROM products p
+JOIN store_products sp ON p.product_id = sp.product_id
+JOIN stores s ON sp.store_number = s.store_number
+WHERE s.location = 'Geneva, NY';
 
-List known categories. Auto-discovers from Algolia facets if DB is empty.
+-- Compare prices across stores
+SELECT p.name, s.location, sp.price
+FROM products p
+JOIN store_products sp ON p.product_id = sp.product_id
+JOIN stores s ON sp.store_number = s.store_number
+WHERE p.name LIKE '%yogurt%'
+ORDER BY p.name, sp.price;
+```
+
+### `list_categories(store, level?)`
+
+List known categories for a store. Auto-discovers from Algolia facets if DB is empty.
 
 ```typescript
-list_categories(level?: number) -> {
+list_categories(store: string, level?: number) -> {
   categories: Array<{
     name: string,
     parent: string | null,
@@ -110,23 +129,38 @@ list_categories(level?: number) -> {
 }
 ```
 
-### `refresh()`
+### `list_stores()`
 
-Re-run all previous searches to refresh data.
+List all stores currently represented in the database.
 
 ```typescript
-refresh() -> {
+list_stores() -> {
+  stores: Array<{
+    store_number: string,
+    location: string,
+    product_count: number,
+    last_updated: string
+  }>
+}
+```
+
+### `refresh(store?)`
+
+Re-run previous searches to refresh data. If store provided, only refresh that store.
+
+```typescript
+refresh(store?: string) -> {
   searches_run: number,
   products_updated: number
 }
 ```
 
-### `clear()`
+### `clear(store?)`
 
-Wipe database for fresh start.
+Wipe database. If store provided, only clear that store's data.
 
 ```typescript
-clear() -> {
+clear(store?: string) -> {
   products_deleted: number,
   searches_deleted: number
 }
@@ -149,6 +183,8 @@ refresh_api_key() -> {
 
 **Location:** `~/.config/wegmans-mcp/products.db`
 
+**Design Principle:** Normalized multi-store schema. Product metadata (name, nutrition, ingredients) is shared across stores. Store-specific data (price, aisle) is separate.
+
 ```sql
 -- API credentials
 CREATE TABLE api_keys (
@@ -158,33 +194,51 @@ CREATE TABLE api_keys (
   extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Search history (for refresh)
-CREATE TABLE searches (
-  query TEXT PRIMARY KEY,
-  category_filter TEXT,
-  result_count INTEGER,
-  last_run TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+-- Known stores
+CREATE TABLE stores (
+  store_number TEXT PRIMARY KEY,
+  location TEXT NOT NULL,           -- "Geneva, NY"
+  last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Products (core fields only)
+-- Search history (for refresh) - per store
+CREATE TABLE searches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_number TEXT NOT NULL REFERENCES stores(store_number),
+  query TEXT,
+  category_filter TEXT,
+  result_count INTEGER,
+  last_run TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(store_number, query, category_filter)
+);
+
+-- Products - metadata only (shared across stores)
 CREATE TABLE products (
   product_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   brand TEXT,
   description TEXT,
-  price REAL,
-  unit_price TEXT,
-  is_sold_by_weight BOOLEAN,
-  aisle TEXT,
   pack_size TEXT,
   image_url TEXT,
   ingredients TEXT,
   allergens TEXT,
+  is_sold_by_weight BOOLEAN,
   raw_json JSON,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Serving info
+-- Store-specific product data (price, aisle vary by store)
+CREATE TABLE store_products (
+  product_id TEXT REFERENCES products(product_id),
+  store_number TEXT REFERENCES stores(store_number),
+  price REAL,
+  unit_price TEXT,                  -- "$9.99/lb."
+  aisle TEXT,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (product_id, store_number)
+);
+
+-- Serving info (same across stores)
 CREATE TABLE servings (
   product_id TEXT PRIMARY KEY REFERENCES products(product_id),
   serving_size REAL,
@@ -192,7 +246,7 @@ CREATE TABLE servings (
   servings_per_container TEXT
 );
 
--- Nutrition facts (fully normalized)
+-- Nutrition facts (fully normalized, same across stores)
 CREATE TABLE nutrition_facts (
   product_id TEXT REFERENCES products(product_id),
   nutrient TEXT,
@@ -202,13 +256,12 @@ CREATE TABLE nutrition_facts (
   PRIMARY KEY (product_id, nutrient)
 );
 
--- Category hierarchy
+-- Category hierarchy (global, not per-store)
 CREATE TABLE categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   parent_id INTEGER REFERENCES categories(id),
   level INTEGER NOT NULL,
-  product_count INTEGER,
   UNIQUE(name, parent_id)
 );
 
@@ -219,7 +272,7 @@ CREATE TABLE product_categories (
   PRIMARY KEY (product_id, category_id)
 );
 
--- Tags
+-- Tags (global)
 CREATE TABLE tags (
   tag TEXT PRIMARY KEY
 );
@@ -230,16 +283,18 @@ CREATE TABLE product_tags (
   PRIMARY KEY (product_id, tag)
 );
 
--- Search-product junction (provenance)
+-- Search-product junction (provenance, per search)
 CREATE TABLE search_products (
-  query TEXT REFERENCES searches(query),
+  search_id INTEGER REFERENCES searches(id),
   product_id TEXT REFERENCES products(product_id),
-  PRIMARY KEY (query, product_id)
+  PRIMARY KEY (search_id, product_id)
 );
 
 -- Indexes
-CREATE INDEX idx_products_aisle ON products(aisle);
-CREATE INDEX idx_products_price ON products(price);
+CREATE INDEX idx_store_products_store ON store_products(store_number);
+CREATE INDEX idx_store_products_price ON store_products(price);
+CREATE INDEX idx_store_products_aisle ON store_products(aisle);
+CREATE INDEX idx_searches_store ON searches(store_number);
 CREATE INDEX idx_nutrition_nutrient ON nutrition_facts(nutrient);
 CREATE INDEX idx_nutrition_quantity ON nutrition_facts(nutrient, quantity);
 CREATE INDEX idx_categories_parent ON categories(parent_id);
@@ -319,6 +374,7 @@ wegmans-mcp/
 │   │   ├── search.ts         # search() tool
 │   │   ├── query.ts          # query() tool
 │   │   ├── listCategories.ts # list_categories() tool
+│   │   ├── listStores.ts     # list_stores() tool
 │   │   ├── refresh.ts        # refresh() tool
 │   │   └── clear.ts          # clear() tool
 │   ├── algolia/
@@ -326,6 +382,7 @@ wegmans-mcp/
 │   │   └── keyExtractor.ts   # Playwright key extraction
 │   ├── db/
 │   │   ├── schema.ts         # SQLite schema + migrations
+│   │   ├── stores.ts         # Store CRUD operations
 │   │   ├── products.ts       # Product CRUD operations
 │   │   └── queries.ts        # Raw SQL query execution
 │   └── types/
@@ -355,10 +412,6 @@ ESLint with `@typescript-eslint/strict` + `@typescript-eslint/stylistic` rule se
 
 ```typescript
 interface Config {
-  store: {
-    location: string;      // "Geneva, NY"
-    number?: string;       // Discovered from Algolia, e.g., "059"
-  };
   algolia: {
     appId: string;         // "QGPPR19V8V" (hardcoded default)
     apiKey?: string;       // Extracted, cached here
@@ -370,6 +423,8 @@ interface Config {
 }
 ```
 
+Note: No default store in config. Store is always passed explicitly to tools. Known stores are tracked in the `stores` table in the database.
+
 ## Error Handling
 
 | Scenario | Behavior |
@@ -377,7 +432,7 @@ interface Config {
 | No API key yet | Auto-extract on first `search()` |
 | Algolia returns 401/403 | Re-extract key, retry once, then fail with clear message |
 | Algolia rate limited | Return error, suggest waiting |
-| Store not found | Prompt user to check store location in config |
+| Store not found in Algolia | Return error with suggestion to check store name spelling |
 | Invalid SQL in `query()` | Return SQLite error message (helpful for Claude to self-correct) |
 | Browser automation fails | Return error with suggestion to check Playwright install |
 | Network timeout | Return error, suggest retry |
