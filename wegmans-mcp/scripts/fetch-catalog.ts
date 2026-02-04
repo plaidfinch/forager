@@ -3,11 +3,10 @@
  * Fetches the full Wegmans product catalog for a store using minimum queries.
  *
  * Strategy:
- * 1. Initial query to get category facet counts
- * 2. For categories ≤1000 products: single query fetches all
- * 3. For categories >1000 products: drill down to subcategories
- * 4. Repeat until all leaf queries are ≤1000 products
- * 5. Execute queries, deduplicate by productId
+ * 1. Start with a broad query (all products)
+ * 2. If > 1000 results, dynamically split by best available facet
+ * 3. Recursively split until all buckets are <= 1000
+ * 4. Execute all leaf queries, deduplicate by productId
  *
  * Usage: npx tsx scripts/fetch-catalog.ts [storeNumber]
  */
@@ -21,10 +20,6 @@ const ALGOLIA_URL = `https://${ALGOLIA_APP_ID.toLowerCase()}-dsn.algolia.net/1/i
 const MAX_HITS_PER_QUERY = 1000;
 const DEFAULT_STORE = "74";
 
-interface FacetCounts {
-  [key: string]: number;
-}
-
 interface AlgoliaHit {
   objectID: string;
   productId?: string;
@@ -35,9 +30,7 @@ interface AlgoliaHit {
 interface AlgoliaResult {
   hits: AlgoliaHit[];
   nbHits: number;
-  facets?: {
-    [facetName: string]: FacetCounts;
-  };
+  facets?: Record<string, Record<string, number>>;
 }
 
 interface AlgoliaResponse {
@@ -86,283 +79,84 @@ async function algoliaQuery(
   return data.results[0];
 }
 
-interface CategoryNode {
-  path: string;
-  count: number;
-  level: number;
-}
-
-interface QueryPlan {
-  filters: string[];
-  parentOnlyQueries: Array<{
-    parentPath: string;
-    parentLevel: number;
-    childPaths: string[];
-    estimatedCount: number;
-  }>;
-  uncategorizedQuery: string | null; // For products with no category at all
-  totalProducts: number;
+interface SplitTask {
+  name: string;
+  filter: string | null; // null = no additional filter (root query)
 }
 
 /**
- * Build the list of category filters needed to fetch all products.
- * Recursively drills down into categories that exceed MAX_HITS_PER_QUERY.
- * Also generates queries for products in parent categories but not in subcategories.
+ * Find the best facet to split on for a given result set.
+ * Goals: minimize total queries while maximizing coverage.
+ *
+ * Strategy:
+ * 1. Use category facets (they partition products, no overlap)
+ * 2. Fall back to boolean facets (ebtEligible, isAvailable) for non-categorized
+ * 3. Avoid array facets (fulfilmentType) that cause overlap
  */
-async function buildQueryPlan(storeNumber: string): Promise<QueryPlan> {
-  console.log("Fetching initial facet counts...");
+function findBestSplit(
+  facets: Record<string, Record<string, number>>,
+  currentCount: number
+): { attr: string; values: Array<{ value: string; count: number }> } | null {
+  // Try attributes in priority order
+  const priorityAttrs = [
+    // Category facets - partition products cleanly
+    "categories.lvl0",
+    "categories.lvl1",
+    "categories.lvl2",
+    "categories.lvl3",
+    // Boolean facets - for products without categories
+    "ebtEligible",
+    "isAvailable",
+    "isLoyalty",
+    "isAlcoholItem",
+    "hasOffers",
+  ];
 
-  const initial = await algoliaQuery(storeNumber, {
-    hitsPerPage: 1,
-    facets: [
-      "categories.lvl0",
-      "categories.lvl1",
-      "categories.lvl2",
-      "categories.lvl3",
-    ],
-  });
+  // Skip these - they cause overlapping buckets or too many values
+  const skipAttrs = new Set([
+    "storeNumber",
+    "fulfilmentType",      // Array - products have multiple
+    "digitalCouponsOfferIds", // Too many values
+    "category.key",        // Too many values
+    "category.seo",        // Too many values
+    "categoryPageId",      // Too many values
+    "consumerBrandName",   // Too many values
+    "filterTags",          // Array - products have multiple
+    "popularTags",         // Array
+    "keywords",            // Array
+    "loyaltyInstoreDiscount.name",
+    "loyaltyDeliveryDiscount.name",
+    "discountType",
+    "maxQuantity",
+  ]);
 
-  console.log(`Total products: ${initial.nbHits}`);
+  for (const attr of priorityAttrs) {
+    if (skipAttrs.has(attr)) continue;
 
-  // Build category tree from facets
-  const facets = initial.facets ?? {};
-  const allCategories: CategoryNode[] = [];
+    const values = facets[attr];
+    if (!values) continue;
 
-  for (let level = 0; level <= 3; level++) {
-    const levelFacets = facets[`categories.lvl${level}`] ?? {};
-    for (const [path, count] of Object.entries(levelFacets)) {
-      allCategories.push({ path, count, level });
-    }
+    const valueCounts = Object.entries(values).map(([v, c]) => ({
+      value: v,
+      count: c,
+    }));
+
+    // Need at least 2 values to split
+    if (valueCounts.length < 2) continue;
+
+    // Skip if too many values
+    if (valueCounts.length > 30) continue;
+
+    const maxBucket = Math.max(...valueCounts.map((v) => v.count));
+
+    // Must actually reduce the problem
+    if (maxBucket >= currentCount) continue;
+
+    // Found a usable split
+    return { attr, values: valueCounts };
   }
 
-  console.log(`Found ${allCategories.length} total category paths`);
-
-  // Strategy: find the minimal set of category filters
-  // Start with level 0, drill down where needed
-  const queryFilters: string[] = [];
-  const parentOnlyQueries: QueryPlan["parentOnlyQueries"] = [];
-  const covered = new Set<string>();
-
-  function findFiltersForCategory(
-    targetPath: string,
-    targetCount: number,
-    targetLevel: number
-  ): void {
-    if (covered.has(targetPath)) return;
-
-    if (targetCount <= MAX_HITS_PER_QUERY) {
-      // This category can be fetched in one query
-      queryFilters.push(`categories.lvl${targetLevel}:"${targetPath}"`);
-      covered.add(targetPath);
-      return;
-    }
-
-    // Need to drill down to subcategories
-    const prefix = targetPath + " > ";
-    const subcategories = allCategories.filter(
-      (c) => c.level === targetLevel + 1 && c.path.startsWith(prefix)
-    );
-
-    if (subcategories.length === 0) {
-      // No subcategories available, just fetch what we can (capped at 1000)
-      console.warn(
-        `Warning: ${targetPath} has ${targetCount} products but no subcategories. Will only fetch first 1000.`
-      );
-      queryFilters.push(`categories.lvl${targetLevel}:"${targetPath}"`);
-      covered.add(targetPath);
-      return;
-    }
-
-    // Sum of subcategory counts
-    const subcategoryTotal = subcategories.reduce((sum, c) => sum + c.count, 0);
-
-    // Check for uncategorized products (in parent but not in any child)
-    const uncategorized = targetCount - subcategoryTotal;
-    if (uncategorized > 0) {
-      console.log(
-        `  ${targetPath}: ${uncategorized} products not in subcategories`
-      );
-      // Queue a "parent minus children" query to capture these
-      parentOnlyQueries.push({
-        parentPath: targetPath,
-        parentLevel: targetLevel,
-        childPaths: subcategories.map((c) => c.path),
-        estimatedCount: uncategorized,
-      });
-    }
-
-    // Recurse into subcategories
-    for (const sub of subcategories) {
-      findFiltersForCategory(sub.path, sub.count, sub.level);
-    }
-
-    covered.add(targetPath);
-  }
-
-  // Start with top-level categories
-  const level0 = allCategories.filter((c) => c.level === 0);
-  console.log("\nPlanning queries:");
-
-  for (const cat of level0) {
-    console.log(`  ${cat.path}: ${cat.count} products`);
-    findFiltersForCategory(cat.path, cat.count, cat.level);
-  }
-
-  // Check for products with no category at all
-  const level0Total = level0.reduce((sum, c) => sum + c.count, 0);
-  const uncategorizedCount = (initial.nbHits ?? 0) - level0Total;
-  let uncategorizedQuery: string | null = null;
-
-  if (uncategorizedCount > 0) {
-    // Build a query that excludes all lvl0 categories
-    const notClauses = level0
-      .map((c) => `NOT categories.lvl0:"${c.path}"`)
-      .join(" AND ");
-    uncategorizedQuery = notClauses;
-    console.log(`\n  Uncategorized (no category): ${uncategorizedCount} products`);
-  }
-
-  console.log(`\nQuery plan: ${queryFilters.length} category queries`);
-  if (parentOnlyQueries.length > 0) {
-    const totalParentOnly = parentOnlyQueries.reduce(
-      (sum, q) => sum + q.estimatedCount,
-      0
-    );
-    console.log(
-      `           ${parentOnlyQueries.length} parent-only queries (~${totalParentOnly} products)`
-    );
-  }
-  if (uncategorizedQuery) {
-    console.log(`           3 uncategorized queries (~${uncategorizedCount} products, split by ebt/availability)`);
-  }
-
-  return {
-    filters: queryFilters,
-    parentOnlyQueries,
-    uncategorizedQuery,
-    totalProducts: initial.nbHits ?? 0,
-  };
-}
-
-/**
- * Execute queries and collect all products.
- */
-async function fetchAllProducts(
-  storeNumber: string,
-  plan: QueryPlan
-): Promise<Map<string, AlgoliaHit>> {
-  const products = new Map<string, AlgoliaHit>();
-  // 3 queries for uncategorized (split by ebt/availability) if uncategorizedQuery exists
-  const totalQueries =
-    plan.filters.length +
-    plan.parentOnlyQueries.length +
-    (plan.uncategorizedQuery ? 3 : 0);
-  let completed = 0;
-
-  console.log(`\nFetching products from category queries...`);
-
-  // First, fetch all category queries
-  for (const filter of plan.filters) {
-    const result = await algoliaQuery(storeNumber, {
-      filters: filter,
-      hitsPerPage: MAX_HITS_PER_QUERY,
-    });
-
-    for (const hit of result.hits) {
-      const id = hit.productId ?? hit.productID ?? hit.objectID;
-      if (!products.has(id)) {
-        products.set(id, hit);
-      }
-    }
-
-    completed++;
-    const pct = ((completed / totalQueries) * 100).toFixed(1);
-    console.log(
-      `  [${completed}/${totalQueries}] ${pct}% - ${filter}: ${result.hits.length} hits (${products.size} unique total)`
-    );
-
-    // Small delay to be nice to the API
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-
-  // Then, fetch parent-only products (in parent but not in any subcategory)
-  if (plan.parentOnlyQueries.length > 0) {
-    console.log(`\nFetching parent-only products...`);
-
-    for (const poq of plan.parentOnlyQueries) {
-      // Build filter: "in parent AND NOT in child1 AND NOT in child2 ..."
-      const childLevel = poq.parentLevel + 1;
-      const notClauses = poq.childPaths
-        .map((path) => `NOT categories.lvl${childLevel}:"${path}"`)
-        .join(" AND ");
-      const filter = `categories.lvl${poq.parentLevel}:"${poq.parentPath}" AND ${notClauses}`;
-
-      const result = await algoliaQuery(storeNumber, {
-        filters: filter,
-        hitsPerPage: MAX_HITS_PER_QUERY,
-      });
-
-      let newCount = 0;
-      for (const hit of result.hits) {
-        const id = hit.productId ?? hit.productID ?? hit.objectID;
-        if (!products.has(id)) {
-          products.set(id, hit);
-          newCount++;
-        }
-      }
-
-      completed++;
-      const pct = ((completed / totalQueries) * 100).toFixed(1);
-      console.log(
-        `  [${completed}/${totalQueries}] ${pct}% - ${poq.parentPath} (parent-only): ${result.hits.length} hits, ${newCount} new (${products.size} unique total)`
-      );
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-
-  // Finally, fetch products with no category at all
-  // Split by ebtEligible and isAvailable to stay under 1000 per query
-  if (plan.uncategorizedQuery) {
-    console.log(`\nFetching uncategorized products (split by attributes)...`);
-
-    const uncategorizedSplits = [
-      { name: "ebt-eligible", filter: `${plan.uncategorizedQuery} AND ebtEligible:true` },
-      { name: "non-ebt, unavailable", filter: `${plan.uncategorizedQuery} AND ebtEligible:false AND isAvailable:false` },
-      { name: "non-ebt, available", filter: `${plan.uncategorizedQuery} AND ebtEligible:false AND isAvailable:true` },
-    ];
-
-    for (const split of uncategorizedSplits) {
-      const result = await algoliaQuery(storeNumber, {
-        filters: split.filter,
-        hitsPerPage: MAX_HITS_PER_QUERY,
-      });
-
-      let newCount = 0;
-      for (const hit of result.hits) {
-        const id = hit.productId ?? hit.productID ?? hit.objectID;
-        if (!products.has(id)) {
-          products.set(id, hit);
-          newCount++;
-        }
-      }
-
-      completed++;
-      const pct = ((completed / totalQueries) * 100).toFixed(1);
-
-      const cappedNote =
-        result.nbHits > MAX_HITS_PER_QUERY
-          ? ` (capped, ${result.nbHits} total exist)`
-          : "";
-      console.log(
-        `  [${completed}/${totalQueries}] ${pct}% - uncategorized (${split.name}): ${result.hits.length} hits${cappedNote}, ${newCount} new (${products.size} unique total)`
-      );
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-
-  return products;
+  return null;
 }
 
 async function main() {
@@ -371,21 +165,154 @@ async function main() {
 
   const startTime = Date.now();
 
-  // Build query plan
-  const plan = await buildQueryPlan(storeNumber);
+  // Start with root query to get total count
+  console.log("Analyzing catalog structure...");
+  const rootResult = await algoliaQuery(storeNumber, {
+    hitsPerPage: 0,
+    facets: ["*"],
+  });
 
-  // Execute queries
-  const products = await fetchAllProducts(storeNumber, plan);
+  const totalProducts = rootResult.nbHits;
+  console.log(`Total products: ${totalProducts}\n`);
 
-  const totalQueries =
-    plan.filters.length +
-    plan.parentOnlyQueries.length +
-    (plan.uncategorizedQuery ? 3 : 0);
+  // Queue of tasks to process
+  const queue: SplitTask[] = [{ name: "root", filter: null }];
+  const ready: SplitTask[] = [];
+  let iterations = 0;
+  const maxIterations = 500;
+
+  console.log("Building query plan (dynamic splitting)...");
+
+  while (queue.length > 0 && iterations < maxIterations) {
+    iterations++;
+    const task = queue.shift()!;
+
+    // Get count and facets for this filter
+    const result = await algoliaQuery(storeNumber, {
+      filters: task.filter ?? undefined,
+      hitsPerPage: 0,
+      facets: ["*"],
+    });
+
+    const count = result.nbHits;
+
+    if (count === 0) {
+      continue;
+    }
+
+    if (count <= MAX_HITS_PER_QUERY) {
+      // Small enough to fetch directly
+      ready.push(task);
+      continue;
+    }
+
+    // Need to split
+    const split = findBestSplit(result.facets ?? {}, count);
+
+    if (split) {
+      const shortName =
+        task.name.length > 40 ? "..." + task.name.slice(-37) : task.name;
+      console.log(
+        `  Split "${shortName}" (${count}) by ${split.attr} -> ${split.values.length} buckets`
+      );
+
+      // Calculate how many products are covered by the split
+      const coveredCount = split.values.reduce((sum, v) => sum + v.count, 0);
+      const uncoveredCount = count - coveredCount;
+
+      for (const { value } of split.values) {
+        const quotedValue = value.includes(" ") ? `"${value}"` : value;
+        const newFilter = task.filter
+          ? `${task.filter} AND ${split.attr}:${quotedValue}`
+          : `${split.attr}:${quotedValue}`;
+
+        queue.push({
+          name: `${split.attr}:${value}`,
+          filter: newFilter,
+        });
+      }
+
+      // If there are uncovered products, add a "NOT any of these" query
+      if (uncoveredCount > 0) {
+        const notClauses = split.values
+          .map(({ value }) => {
+            const quotedValue = value.includes(" ") ? `"${value}"` : value;
+            return `NOT ${split.attr}:${quotedValue}`;
+          })
+          .join(" AND ");
+
+        const remainderFilter = task.filter
+          ? `${task.filter} AND ${notClauses}`
+          : notClauses;
+
+        queue.push({
+          name: `NOT ${split.attr}`,
+          filter: remainderFilter,
+        });
+
+        console.log(`    + remainder (${uncoveredCount} without ${split.attr})`);
+      }
+    } else {
+      // Can't split further
+      console.warn(
+        `  Warning: "${task.name}" (${count}) can't be split, fetching first 1000`
+      );
+      ready.push(task);
+    }
+
+    // Small delay to avoid hammering the API during planning
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+
+  if (iterations >= maxIterations) {
+    console.warn(`\nWarning: Hit iteration limit (${maxIterations})`);
+  }
+
+  console.log(`\nQuery plan complete: ${ready.length} queries`);
+  console.log(`\nFetching products...`);
+
+  // Execute all ready queries
+  const products = new Map<string, AlgoliaHit>();
+  let completed = 0;
+
+  for (const task of ready) {
+    const result = await algoliaQuery(storeNumber, {
+      filters: task.filter ?? undefined,
+      hitsPerPage: MAX_HITS_PER_QUERY,
+    });
+
+    let newCount = 0;
+    for (const hit of result.hits) {
+      const id = hit.productId ?? hit.productID ?? hit.objectID;
+      if (!products.has(id)) {
+        products.set(id, hit);
+        newCount++;
+      }
+    }
+
+    completed++;
+    const pct = ((completed / ready.length) * 100).toFixed(1);
+
+    const shortName =
+      task.name.length > 50 ? "..." + task.name.slice(-47) : task.name;
+    const cappedNote =
+      result.nbHits > MAX_HITS_PER_QUERY
+        ? ` (capped, ${result.nbHits} total)`
+        : "";
+
+    console.log(
+      `  [${completed}/${ready.length}] ${pct}% - ${shortName}: ${result.hits.length}${cappedNote} (${products.size} total)`
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  const coverage = ((products.size / plan.totalProducts) * 100).toFixed(1);
+  const coverage = ((products.size / totalProducts) * 100).toFixed(1);
+
   console.log(`\nComplete!`);
-  console.log(`  Queries: ${totalQueries}`);
-  console.log(`  Unique products: ${products.size} / ${plan.totalProducts} (${coverage}%)`);
+  console.log(`  Queries: ${ready.length}`);
+  console.log(`  Unique products: ${products.size} / ${totalProducts} (${coverage}%)`);
   console.log(`  Time: ${elapsed}s`);
 
   // Save results
@@ -397,8 +324,10 @@ async function main() {
   const output = {
     storeNumber,
     fetchedAt: new Date().toISOString(),
-    queryCount: totalQueries,
+    queryCount: ready.length,
     productCount: products.size,
+    totalProducts,
+    coverage: `${coverage}%`,
     products: Array.from(products.values()),
   };
 
