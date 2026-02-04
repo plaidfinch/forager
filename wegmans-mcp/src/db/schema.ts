@@ -46,12 +46,35 @@ export function initializeSchema(db: Database.Database): void {
       street_address TEXT,
       latitude REAL,
       longitude REAL,
+      phone_number TEXT,
       has_pickup INTEGER,
       has_delivery INTEGER,
       has_ecommerce INTEGER,
+      has_pharmacy INTEGER,
+      sells_alcohol INTEGER,
+      open_state TEXT,
+      opening_date TEXT,
+      zones TEXT,
       last_updated TEXT
     )
   `);
+
+  // Add columns for existing databases (safe to run multiple times)
+  const storeColumns = [
+    "phone_number TEXT",
+    "has_pharmacy INTEGER",
+    "sells_alcohol INTEGER",
+    "open_state TEXT",
+    "opening_date TEXT",
+    "zones TEXT",
+  ];
+  for (const col of storeColumns) {
+    try {
+      db.exec(`ALTER TABLE stores ADD COLUMN ${col}`);
+    } catch {
+      // Column already exists, ignore
+    }
+  }
 
   // Products table (store-independent metadata)
   db.exec(`

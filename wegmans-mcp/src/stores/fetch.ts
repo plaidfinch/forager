@@ -18,9 +18,15 @@ export interface StoreInfo {
   streetAddress: string | null;
   latitude: number | null;
   longitude: number | null;
+  phoneNumber: string | null;
   hasPickup: boolean | null;
   hasDelivery: boolean | null;
   hasECommerce: boolean | null;
+  hasPharmacy: boolean | null;
+  sellsAlcohol: boolean | null;
+  openState: string | null;
+  openingDate: string | null;
+  zones: string | null;
 }
 
 interface ApiStore {
@@ -32,9 +38,15 @@ interface ApiStore {
   streetAddress?: string;
   latitude?: number;
   longitude?: number;
+  phoneNumber?: string;
   hasPickup?: boolean;
   hasDelivery?: boolean;
   hasECommerce?: boolean;
+  hasPharmacy?: boolean;
+  sellsAlcohol?: boolean;
+  openState?: string;
+  openingDate?: string;
+  zones?: string;
 }
 
 /**
@@ -50,9 +62,15 @@ function transformApiStore(apiStore: ApiStore): StoreInfo {
     streetAddress: apiStore.streetAddress ?? null,
     latitude: apiStore.latitude ?? null,
     longitude: apiStore.longitude ?? null,
+    phoneNumber: apiStore.phoneNumber ?? null,
     hasPickup: apiStore.hasPickup ?? null,
     hasDelivery: apiStore.hasDelivery ?? null,
     hasECommerce: apiStore.hasECommerce ?? null,
+    hasPharmacy: apiStore.hasPharmacy ?? null,
+    sellsAlcohol: apiStore.sellsAlcohol ?? null,
+    openState: apiStore.openState ?? null,
+    openingDate: apiStore.openingDate ?? null,
+    zones: apiStore.zones ?? null,
   };
 }
 
@@ -95,7 +113,9 @@ export function getStoresFromCache(db: Database.Database): StoreInfo[] {
   const rows = db
     .prepare(`
       SELECT store_number, name, city, state, zip_code, street_address,
-             latitude, longitude, has_pickup, has_delivery, has_ecommerce
+             latitude, longitude, phone_number, has_pickup, has_delivery,
+             has_ecommerce, has_pharmacy, sells_alcohol, open_state,
+             opening_date, zones
       FROM stores
       ORDER BY CAST(store_number AS INTEGER)
     `)
@@ -108,9 +128,15 @@ export function getStoresFromCache(db: Database.Database): StoreInfo[] {
       street_address: string | null;
       latitude: number | null;
       longitude: number | null;
+      phone_number: string | null;
       has_pickup: number | null;
       has_delivery: number | null;
       has_ecommerce: number | null;
+      has_pharmacy: number | null;
+      sells_alcohol: number | null;
+      open_state: string | null;
+      opening_date: string | null;
+      zones: string | null;
     }>;
 
   return rows.map((row) => ({
@@ -122,9 +148,15 @@ export function getStoresFromCache(db: Database.Database): StoreInfo[] {
     streetAddress: row.street_address,
     latitude: row.latitude,
     longitude: row.longitude,
+    phoneNumber: row.phone_number,
     hasPickup: row.has_pickup === null ? null : row.has_pickup === 1,
     hasDelivery: row.has_delivery === null ? null : row.has_delivery === 1,
     hasECommerce: row.has_ecommerce === null ? null : row.has_ecommerce === 1,
+    hasPharmacy: row.has_pharmacy === null ? null : row.has_pharmacy === 1,
+    sellsAlcohol: row.sells_alcohol === null ? null : row.sells_alcohol === 1,
+    openState: row.open_state,
+    openingDate: row.opening_date,
+    zones: row.zones,
   }));
 }
 
@@ -135,10 +167,14 @@ export function saveStoresToCache(db: Database.Database, stores: StoreInfo[]): v
   const upsertStore = db.prepare(`
     INSERT INTO stores (
       store_number, name, city, state, zip_code, street_address,
-      latitude, longitude, has_pickup, has_delivery, has_ecommerce, last_updated
+      latitude, longitude, phone_number, has_pickup, has_delivery,
+      has_ecommerce, has_pharmacy, sells_alcohol, open_state,
+      opening_date, zones, last_updated
     ) VALUES (
       @storeNumber, @name, @city, @state, @zipCode, @streetAddress,
-      @latitude, @longitude, @hasPickup, @hasDelivery, @hasECommerce, @lastUpdated
+      @latitude, @longitude, @phoneNumber, @hasPickup, @hasDelivery,
+      @hasECommerce, @hasPharmacy, @sellsAlcohol, @openState,
+      @openingDate, @zones, @lastUpdated
     )
     ON CONFLICT(store_number) DO UPDATE SET
       name = excluded.name,
@@ -148,9 +184,15 @@ export function saveStoresToCache(db: Database.Database, stores: StoreInfo[]): v
       street_address = excluded.street_address,
       latitude = excluded.latitude,
       longitude = excluded.longitude,
+      phone_number = excluded.phone_number,
       has_pickup = excluded.has_pickup,
       has_delivery = excluded.has_delivery,
       has_ecommerce = excluded.has_ecommerce,
+      has_pharmacy = excluded.has_pharmacy,
+      sells_alcohol = excluded.sells_alcohol,
+      open_state = excluded.open_state,
+      opening_date = excluded.opening_date,
+      zones = excluded.zones,
       last_updated = excluded.last_updated
   `);
 
@@ -171,9 +213,15 @@ export function saveStoresToCache(db: Database.Database, stores: StoreInfo[]): v
         streetAddress: store.streetAddress,
         latitude: store.latitude,
         longitude: store.longitude,
+        phoneNumber: store.phoneNumber,
         hasPickup: store.hasPickup === null ? null : store.hasPickup ? 1 : 0,
         hasDelivery: store.hasDelivery === null ? null : store.hasDelivery ? 1 : 0,
         hasECommerce: store.hasECommerce === null ? null : store.hasECommerce ? 1 : 0,
+        hasPharmacy: store.hasPharmacy === null ? null : store.hasPharmacy ? 1 : 0,
+        sellsAlcohol: store.sellsAlcohol === null ? null : store.sellsAlcohol ? 1 : 0,
+        openState: store.openState,
+        openingDate: store.openingDate,
+        zones: store.zones,
         lastUpdated: now,
       });
     }
