@@ -42,7 +42,7 @@ describe("schemaTool", () => {
 
     expect(result.success).toBe(true);
     expect(result.tables).toBeDefined();
-    expect(result.tables?.length).toBeGreaterThan(0);
+    expect(result.tables).toHaveLength(12); // Schema has exactly 12 tables
     expect(result.error).toBeUndefined();
   });
 

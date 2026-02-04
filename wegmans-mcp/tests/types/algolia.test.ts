@@ -151,6 +151,8 @@ describe("Algolia Zod Schema", () => {
         }
       }
     }
+
+    throw new Error("No nutrition data found in any response - test data may be incomplete");
   });
 
   it("parses pricing data correctly", () => {
@@ -190,6 +192,8 @@ describe("Algolia Zod Schema", () => {
         }
       }
     }
+
+    throw new Error("No pricing data found in any response - test data may be incomplete");
   });
 
   it("parses planogram (aisle) data correctly", () => {
@@ -226,5 +230,7 @@ describe("Algolia Zod Schema", () => {
         }
       }
     }
+
+    throw new Error("No planogram data found in any response - test data may be incomplete");
   });
 });

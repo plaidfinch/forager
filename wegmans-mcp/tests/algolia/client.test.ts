@@ -40,7 +40,7 @@ describe("Algolia Client", () => {
       });
 
       expect(request.requests).toBeDefined();
-      expect(request.requests.length).toBeGreaterThan(0);
+      expect(request.requests).toHaveLength(1); // Builds exactly one request
       expect(request.requests[0]?.query).toBe("yogurt");
       expect(request.requests[0]?.indexName).toBe("products");
     });
@@ -207,7 +207,7 @@ describe("Algolia Client", () => {
       );
       const parsed = AlgoliaMultiQueryResponseSchema.parse(raw);
 
-      // Find a hit with nutrition data
+      // Find a hit with nutrition data - our snapshots should contain this
       let serving = null;
       for (const result of parsed.results) {
         for (const hit of result.hits) {
@@ -219,9 +219,9 @@ describe("Algolia Client", () => {
         if (serving) break;
       }
 
-      if (serving) {
-        expect(serving.productId).toBeTruthy();
-      }
+      // Fail explicitly if no test data - don't silently pass
+      expect(serving).not.toBeNull();
+      expect(serving!.productId).toBeTruthy();
     });
 
     it("returns null when no serving data", () => {
@@ -245,7 +245,7 @@ describe("Algolia Client", () => {
       );
       const parsed = AlgoliaMultiQueryResponseSchema.parse(raw);
 
-      // Find a hit with nutrition data
+      // Find a hit with nutrition data - our snapshots should contain this
       let facts: any[] = [];
       for (const result of parsed.results) {
         for (const hit of result.hits) {
@@ -257,11 +257,11 @@ describe("Algolia Client", () => {
         if (facts.length > 0) break;
       }
 
-      if (facts.length > 0) {
-        expect(facts[0]?.productId).toBeTruthy();
-        expect(facts[0]?.nutrient).toBeTruthy();
-        expect(["general", "vitamin"]).toContain(facts[0]?.category);
-      }
+      // Fail explicitly if no test data - don't silently pass
+      expect(facts.length).toBeGreaterThan(0);
+      expect(facts[0]?.productId).toBeTruthy();
+      expect(facts[0]?.nutrient).toBeTruthy();
+      expect(["general", "vitamin"]).toContain(facts[0]?.category);
     });
 
     it("returns empty array when no nutrition data", () => {

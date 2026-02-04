@@ -127,5 +127,7 @@ describe.skipIf(SKIP_INTEGRATION)("Algolia Client (integration)", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
+    // Verify error indicates authentication/authorization failure
+    expect(result.error).toMatch(/invalid|unauthorized|forbidden|403|401/i);
   });
 });
