@@ -64,7 +64,7 @@ describe("MCP Server", () => {
       });
     });
 
-    it("defines search tool with query, storeNumber, and optional hitsPerPage", () => {
+    it("defines search tool with query, storeNumber, and optional hitsPerPage/filters", () => {
       const searchTool = TOOL_DEFINITIONS.find((t) => t.name === "search");
 
       expect(searchTool).toBeDefined();
@@ -75,6 +75,7 @@ describe("MCP Server", () => {
           query: { type: "string", description: expect.any(String) },
           storeNumber: { type: "string", description: expect.any(String) },
           hitsPerPage: { type: "number", description: expect.any(String) },
+          filters: { type: "string", description: expect.any(String) },
         },
         required: ["query", "storeNumber"],
       });

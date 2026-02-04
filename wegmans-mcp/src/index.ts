@@ -62,7 +62,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "search",
     description:
-      "Search for products on Wegmans and populate the local database with results. Requires an API key (use refreshApiKey first if needed).",
+      "Search for products on Wegmans and populate the local database with results. Requires an API key (use refreshApiKey first if needed). Use filters for category/tag filtering.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -77,6 +77,11 @@ export const TOOL_DEFINITIONS = [
         hitsPerPage: {
           type: "number",
           description: "Number of results per page (default: 20)",
+        },
+        filters: {
+          type: "string",
+          description:
+            "Raw Algolia filter string. Examples: 'filterTags:Organic', 'categories.lvl0:Dairy AND filterTags:\"Gluten Free\"', 'consumerBrandName:Wegmans'",
         },
       },
       required: ["query", "storeNumber"],
@@ -169,10 +174,11 @@ export function createServer(): Server {
         }
 
         case "search": {
-          const { query, storeNumber, hitsPerPage } = args as {
+          const { query, storeNumber, hitsPerPage, filters } = args as {
             query?: string;
             storeNumber?: string;
             hitsPerPage?: number;
+            filters?: string;
           };
 
           if (typeof query !== "string" || typeof storeNumber !== "string") {
@@ -211,6 +217,7 @@ export function createServer(): Server {
             storeNumber,
             apiKey,
             ...(hitsPerPage !== undefined && { hitsPerPage }),
+            ...(filters !== undefined && { filters }),
           };
           const result = await searchTool(db, searchOptions);
           return {

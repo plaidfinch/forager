@@ -91,6 +91,34 @@ describe("Algolia Client", () => {
 
       expect(request.requests[0]?.query).toBe("");
     });
+
+    it("merges user filters with base filters", () => {
+      const request = buildSearchRequest({
+        query: "milk",
+        storeNumber: "74",
+        filters: "filterTags:Organic",
+      });
+
+      const filters = request.requests[0]?.filters;
+
+      // Should include both base filters and user filters
+      expect(filters).toContain("storeNumber:74");
+      expect(filters).toContain("isSoldAtStore:true");
+      expect(filters).toContain("filterTags:Organic");
+    });
+
+    it("supports complex filter expressions", () => {
+      const request = buildSearchRequest({
+        query: "",
+        storeNumber: "74",
+        filters: 'categories.lvl0:Dairy AND filterTags:"Gluten Free"',
+      });
+
+      const filters = request.requests[0]?.filters;
+
+      expect(filters).toContain("categories.lvl0:Dairy");
+      expect(filters).toContain('filterTags:"Gluten Free"');
+    });
   });
 
   describe("parseSearchResponse", () => {

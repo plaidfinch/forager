@@ -33,6 +33,8 @@ export interface SearchToolOptions {
   apiKey: string;
   /** Number of hits per page (default: 20) */
   hitsPerPage?: number;
+  /** Raw Algolia filter string (e.g., 'filterTags:Organic AND categories.lvl0:Dairy') */
+  filters?: string;
   /** Injectable search function for testing (defaults to searchProducts) */
   searchFn?: (apiKey: string, options: SearchRequestOptions) => Promise<SearchResult>;
 }
@@ -63,16 +65,20 @@ export async function searchTool(
     storeNumber,
     apiKey,
     hitsPerPage,
+    filters,
     searchFn = searchProducts,
   } = options;
 
-  // Build search options, only including hitsPerPage if defined
+  // Build search options, only including optional params if defined
   const searchOptions: SearchRequestOptions = {
     query,
     storeNumber,
   };
   if (hitsPerPage !== undefined) {
     searchOptions.hitsPerPage = hitsPerPage;
+  }
+  if (filters !== undefined) {
+    searchOptions.filters = filters;
   }
 
   // Execute search

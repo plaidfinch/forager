@@ -45,6 +45,8 @@ export interface SearchRequestOptions {
   page?: number;
   /** Fulfillment type filter */
   fulfillmentType?: "instore" | "pickup" | "delivery";
+  /** Additional raw Algolia filter string (e.g., 'filterTags:Organic') */
+  filters?: string;
 }
 
 export interface AlgoliaSearchRequest {
@@ -72,15 +74,21 @@ export function buildSearchRequest(
     hitsPerPage = 20,
     page = 0,
     fulfillmentType = "instore",
+    filters: userFilters,
   } = options;
 
-  // Build filter string matching Wegmans' format
-  const filters = [
+  // Build base filter string matching Wegmans' format
+  const baseFilters = [
     `storeNumber:${storeNumber}`,
     `fulfilmentType:${fulfillmentType}`,
     "excludeFromWeb:false",
     "isSoldAtStore:true",
   ].join(" AND ");
+
+  // Merge with user-provided filters
+  const filters = userFilters
+    ? `${baseFilters} AND ${userFilters}`
+    : baseFilters;
 
   // Analytics tags for tracking
   const analyticsTags = [
