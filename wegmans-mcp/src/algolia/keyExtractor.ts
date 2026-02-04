@@ -6,7 +6,7 @@
  * to extract the key by intercepting network requests.
  */
 
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser } from "playwright";
 
 export interface KeyExtractionResult {
   success: boolean;
@@ -89,7 +89,7 @@ export function parseStoreNumberFromRequest(
  * @returns Extraction result with API key, app ID, and store number
  */
 export async function extractAlgoliaKey(
-  storeName: string,
+  _storeName: string,
   options: {
     headless?: boolean;
     timeout?: number;
