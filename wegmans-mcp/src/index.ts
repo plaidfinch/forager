@@ -52,7 +52,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "schema",
     description:
-      "Get the database schema (CREATE TABLE statements) to understand available tables and columns.",
+      "Get the database schema (CREATE TABLE/VIEW statements) to understand available tables and columns. Includes categories/tags ontology tables and views for querying product taxonomy. Use product_tags view to join products with their filter/popular tags.",
     inputSchema: {
       type: "object" as const,
       properties: {},

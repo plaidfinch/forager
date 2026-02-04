@@ -18,16 +18,25 @@ export interface SchemaToolResult {
   error?: string;
 }
 
+export interface ViewDDL {
+  name: string;
+  ddl: string;
+}
+
+export interface SchemaToolResultExtended extends SchemaToolResult {
+  views?: ViewDDL[];
+}
+
 /**
- * Retrieve DDL for all tables in the database.
+ * Retrieve DDL for all tables and views in the database.
  *
  * @param db - Database connection
- * @returns Schema result with table DDL on success, or error on failure
+ * @returns Schema result with table/view DDL on success, or error on failure
  */
-export function schemaTool(db: Database.Database): SchemaToolResult {
+export function schemaTool(db: Database.Database): SchemaToolResultExtended {
   try {
     // Query sqlite_master for all table definitions
-    const stmt = db.prepare(`
+    const tableStmt = db.prepare(`
       SELECT name, sql
       FROM sqlite_master
       WHERE type = 'table'
@@ -35,9 +44,24 @@ export function schemaTool(db: Database.Database): SchemaToolResult {
       ORDER BY name
     `);
 
-    const rows = stmt.all() as Array<{ name: string; sql: string }>;
+    const tableRows = tableStmt.all() as Array<{ name: string; sql: string }>;
 
-    const tables: TableDDL[] = rows.map((row) => ({
+    const tables: TableDDL[] = tableRows.map((row) => ({
+      name: row.name,
+      ddl: row.sql,
+    }));
+
+    // Query sqlite_master for all view definitions
+    const viewStmt = db.prepare(`
+      SELECT name, sql
+      FROM sqlite_master
+      WHERE type = 'view'
+      ORDER BY name
+    `);
+
+    const viewRows = viewStmt.all() as Array<{ name: string; sql: string }>;
+
+    const views: ViewDDL[] = viewRows.map((row) => ({
       name: row.name,
       ddl: row.sql,
     }));
@@ -45,6 +69,7 @@ export function schemaTool(db: Database.Database): SchemaToolResult {
     return {
       success: true,
       tables,
+      views,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

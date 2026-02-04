@@ -104,4 +104,26 @@ describe("schemaTool", () => {
     expect(productsTable!.ddl).toContain("name");
     expect(productsTable!.ddl).toContain("brand");
   });
+
+  it("returns views for product_categories and product_tags", () => {
+    const result = schemaTool(db);
+
+    expect(result.success).toBe(true);
+    expect(result.views).toBeDefined();
+
+    const viewNames = result.views!.map((v) => v.name);
+
+    expect(viewNames).toContain("product_categories");
+    expect(viewNames).toContain("product_tags");
+  });
+
+  it("view DDL shows how to query product tags", () => {
+    const result = schemaTool(db);
+
+    const productTagsView = result.views?.find((v) => v.name === "product_tags");
+
+    expect(productTagsView).toBeDefined();
+    expect(productTagsView!.ddl).toContain("tag_name");
+    expect(productTagsView!.ddl).toContain("tag_type");
+  });
 });
