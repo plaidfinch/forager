@@ -13,13 +13,11 @@ import {
 } from "../../src/types/algolia.js";
 import {
   ProductSchema,
-  StoreProductSchema,
   ServingSchema,
   NutritionFactSchema,
 } from "../../src/types/product.js";
 import {
   transformHitToProduct,
-  transformHitToStoreProduct,
   transformHitToServing,
   transformHitToNutritionFacts,
 } from "../../src/algolia/client.js";
@@ -74,26 +72,6 @@ describe("Algolia → Domain Type Transformation", () => {
     });
   });
 
-  it("transforms to StoreProduct and validates schema", () => {
-    const hit = getTestHit();
-    const storeProduct = transformHitToStoreProduct(hit);
-
-    // Validate against schema
-    const result = StoreProductSchema.safeParse(storeProduct);
-    expect(result.success).toBe(true);
-
-    // Verify key fields
-    expect(storeProduct.productId).toBeTruthy();
-    expect(storeProduct.storeNumber).toBeTruthy();
-
-    console.log("Transformed StoreProduct:", {
-      productId: storeProduct.productId,
-      storeNumber: storeProduct.storeNumber,
-      priceInStore: storeProduct.priceInStore,
-      aisle: storeProduct.aisle,
-    });
-  });
-
   it("transforms to Serving and validates schema", () => {
     const hit = getTestHit();
     const serving = transformHitToServing(hit);
@@ -138,12 +116,10 @@ describe("Algolia → Domain Type Transformation", () => {
     };
 
     const product = transformHitToProduct(minimalHit);
-    const storeProduct = transformHitToStoreProduct(minimalHit);
     const serving = transformHitToServing(minimalHit);
     const facts = transformHitToNutritionFacts(minimalHit);
 
     expect(ProductSchema.safeParse(product).success).toBe(true);
-    expect(StoreProductSchema.safeParse(storeProduct).success).toBe(true);
     expect(serving).toBeNull();
     expect(facts).toHaveLength(0);
   });

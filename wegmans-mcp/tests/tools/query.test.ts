@@ -10,11 +10,10 @@ import { existsSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { initializeSchema } from "../../src/db/schema.js";
-import { upsertStore } from "../../src/db/stores.js";
-import { upsertProduct, upsertStoreProduct } from "../../src/db/products.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
+import { upsertProduct } from "../../src/db/products.js";
 import { queryTool } from "../../src/tools/query.js";
-import type { Store, Product } from "../../src/types/product.js";
+import type { Product } from "../../src/types/product.js";
 
 describe("queryTool", () => {
   let testDir: string;
@@ -22,21 +21,7 @@ describe("queryTool", () => {
   let db: Database.Database;
   let readonlyDb: Database.Database;
 
-  const testStore: Store = {
-    storeNumber: "74",
-    name: "Geneva",
-    city: "Geneva",
-    state: "NY",
-    zipCode: "14456",
-    streetAddress: "300 Hamilton Street",
-    latitude: 42.8647,
-    longitude: -76.9977,
-    hasPickup: true,
-    hasDelivery: true,
-    hasECommerce: true,
-    lastUpdated: null,
-  };
-
+  // In per-store database design, Product contains all fields (base + store-specific)
   const testProducts: Product[] = [
     {
       productId: "94427",
@@ -50,6 +35,19 @@ describe("queryTool", () => {
       isSoldByWeight: false,
       isAlcohol: false,
       upc: null,
+      categoryPath: null,
+      tagsFilter: null,
+      tagsPopular: null,
+      priceInStore: 2.99,
+      priceInStoreLoyalty: null,
+      priceDelivery: null,
+      priceDeliveryLoyalty: null,
+      unitPrice: null,
+      aisle: "Dairy",
+      shelf: null,
+      isAvailable: true,
+      isSoldAtStore: true,
+      lastUpdated: null,
     },
     {
       productId: "94428",
@@ -63,6 +61,19 @@ describe("queryTool", () => {
       isSoldByWeight: false,
       isAlcohol: false,
       upc: null,
+      categoryPath: null,
+      tagsFilter: null,
+      tagsPopular: null,
+      priceInStore: 2.79,
+      priceInStoreLoyalty: null,
+      priceDelivery: null,
+      priceDeliveryLoyalty: null,
+      unitPrice: null,
+      aisle: "Dairy",
+      shelf: null,
+      isAvailable: true,
+      isSoldAtStore: true,
+      lastUpdated: null,
     },
   ];
 
@@ -73,27 +84,13 @@ describe("queryTool", () => {
     testDbPath = join(testDir, "test.db");
 
     // Create and populate with read-write connection
+    // Using per-store database schema (no separate store_products table)
     db = new Database(testDbPath);
     db.pragma("foreign_keys = ON");
-    initializeSchema(db);
-    upsertStore(db, testStore);
+    initializeStoreDataSchema(db);
 
     for (const product of testProducts) {
       upsertProduct(db, product);
-      upsertStoreProduct(db, {
-        productId: product.productId,
-        storeNumber: "74",
-        priceInStore: product.productId === "94427" ? 2.99 : 2.79,
-        priceInStoreLoyalty: null,
-        priceDelivery: null,
-        priceDeliveryLoyalty: null,
-        unitPrice: null,
-        aisle: "Dairy",
-        shelf: null,
-        isAvailable: true,
-        isSoldAtStore: true,
-        lastUpdated: null,
-      });
     }
 
     // Open read-only connection for queries

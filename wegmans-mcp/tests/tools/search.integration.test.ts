@@ -7,11 +7,9 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { initializeSchema } from "../../src/db/schema.js";
-import { upsertStore } from "../../src/db/stores.js";
-import { getProduct, getStoreProduct } from "../../src/db/products.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
+import { getProduct } from "../../src/db/products.js";
 import { searchTool } from "../../src/tools/search.js";
-import type { Store } from "../../src/types/product.js";
 
 // Skip in CI - these require network access
 const SKIP_INTEGRATION = process.env.CI === "true" || process.env.SKIP_INTEGRATION === "true";
@@ -23,25 +21,10 @@ const TEST_STORE = "74"; // Geneva, NY
 describe.skipIf(SKIP_INTEGRATION)("searchTool (integration)", () => {
   let db: Database.Database;
 
-  const testStore: Store = {
-    storeNumber: TEST_STORE,
-    name: "Geneva",
-    city: "Geneva",
-    state: "NY",
-    zipCode: "14456",
-    streetAddress: "300 Hamilton Street",
-    latitude: 42.8647,
-    longitude: -76.9977,
-    hasPickup: true,
-    hasDelivery: true,
-    hasECommerce: true,
-    lastUpdated: null,
-  };
-
   beforeEach(() => {
+    // Using per-store database schema
     db = new Database(":memory:");
-    initializeSchema(db);
-    upsertStore(db, testStore);
+    initializeStoreDataSchema(db);
   });
 
   afterEach(() => {
@@ -74,34 +57,25 @@ describe.skipIf(SKIP_INTEGRATION)("searchTool (integration)", () => {
 
     expect(productCount.count).toBe(result.productsAdded);
 
-    // Verify store products were also created
-    const storeProductCount = db
-      .prepare("SELECT COUNT(*) as count FROM store_products WHERE store_number = ?")
-      .get(TEST_STORE) as { count: number };
-
-    expect(storeProductCount.count).toBe(result.productsAdded);
-
     // Check a specific product has expected structure
+    // In per-store database design, product contains pricing/location fields
     const firstProduct = db
       .prepare("SELECT product_id FROM products LIMIT 1")
       .get() as { product_id: string } | undefined;
 
     if (firstProduct) {
       const product = getProduct(db, firstProduct.product_id);
-      const storeProduct = getStoreProduct(db, firstProduct.product_id, TEST_STORE);
 
       console.log("Sample product:", {
         id: product?.productId,
         name: product?.name,
         brand: product?.brand,
-        price: storeProduct?.priceInStore,
-        aisle: storeProduct?.aisle,
+        price: product?.priceInStore,
+        aisle: product?.aisle,
       });
 
       expect(product).not.toBeNull();
       expect(product?.name).toBeTruthy();
-      expect(storeProduct).not.toBeNull();
-      expect(storeProduct?.storeNumber).toBe(TEST_STORE);
     }
   });
 

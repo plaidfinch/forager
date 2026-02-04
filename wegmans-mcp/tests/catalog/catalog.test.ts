@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { initializeSchema } from "../../src/db/schema.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
 import { getCatalogStatus } from "../../src/catalog/index.js";
 import { populateOntology, getOntologyStats } from "../../src/catalog/ontology.js";
 import type { AlgoliaHit } from "../../src/catalog/fetch.js";
@@ -14,7 +14,7 @@ describe("Catalog Management", () => {
 
   beforeEach(() => {
     db = new Database(":memory:");
-    initializeSchema(db);
+    initializeStoreDataSchema(db);
   });
 
   afterEach(() => {
@@ -32,20 +32,11 @@ describe("Catalog Management", () => {
     });
 
     it("reports non-empty catalog with last updated", () => {
-      // Insert a product
-      db.exec(`
-        INSERT INTO products (product_id, name) VALUES ('123', 'Test Product')
-      `);
-
-      // Insert a store with lastUpdated
-      db.exec(`
-        INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')
-      `);
-
+      // Insert a product with last_updated
       const now = new Date().toISOString();
       db.exec(`
-        INSERT INTO store_products (product_id, store_number, last_updated)
-        VALUES ('123', '74', '${now}')
+        INSERT INTO products (product_id, name, last_updated)
+        VALUES ('123', 'Test Product', '${now}')
       `);
 
       const status = getCatalogStatus(db);
@@ -56,20 +47,11 @@ describe("Catalog Management", () => {
     });
 
     it("reports stale catalog when last_updated is old", () => {
-      // Insert a product
-      db.exec(`
-        INSERT INTO products (product_id, name) VALUES ('123', 'Test Product')
-      `);
-
-      db.exec(`
-        INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')
-      `);
-
-      // Insert with old timestamp (2 days ago)
+      // Insert a product with old timestamp (2 days ago)
       const oldDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
       db.exec(`
-        INSERT INTO store_products (product_id, store_number, last_updated)
-        VALUES ('123', '74', '${oldDate}')
+        INSERT INTO products (product_id, name, last_updated)
+        VALUES ('123', 'Test Product', '${oldDate}')
       `);
 
       const status = getCatalogStatus(db);
@@ -79,20 +61,11 @@ describe("Catalog Management", () => {
     });
 
     it("reports fresh catalog when last_updated is recent", () => {
-      // Insert a product
-      db.exec(`
-        INSERT INTO products (product_id, name) VALUES ('123', 'Test Product')
-      `);
-
-      db.exec(`
-        INSERT INTO stores (store_number, name) VALUES ('74', 'Geneva')
-      `);
-
-      // Insert with recent timestamp (1 hour ago)
+      // Insert a product with recent timestamp (1 hour ago)
       const recentDate = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       db.exec(`
-        INSERT INTO store_products (product_id, store_number, last_updated)
-        VALUES ('123', '74', '${recentDate}')
+        INSERT INTO products (product_id, name, last_updated)
+        VALUES ('123', 'Test Product', '${recentDate}')
       `);
 
       const status = getCatalogStatus(db);

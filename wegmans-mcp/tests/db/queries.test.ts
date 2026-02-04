@@ -10,11 +10,10 @@ import { existsSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { initializeSchema } from "../../src/db/schema.js";
-import { upsertStore } from "../../src/db/stores.js";
-import { upsertProduct, upsertStoreProduct } from "../../src/db/products.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
+import { upsertProduct } from "../../src/db/products.js";
 import { executeQuery, type QueryResult } from "../../src/db/queries.js";
-import type { Store, Product } from "../../src/types/product.js";
+import type { Product } from "../../src/types/product.js";
 
 describe("Read-Only SQL Query Execution", () => {
   let testDir: string;
@@ -22,21 +21,7 @@ describe("Read-Only SQL Query Execution", () => {
   let db: Database.Database;
   let readonlyDb: Database.Database;
 
-  const testStore: Store = {
-    storeNumber: "74",
-    name: "Geneva",
-    city: "Geneva",
-    state: "NY",
-    zipCode: "14456",
-    streetAddress: "300 Hamilton Street",
-    latitude: 42.8647,
-    longitude: -76.9977,
-    hasPickup: true,
-    hasDelivery: true,
-    hasECommerce: true,
-    lastUpdated: null,
-  };
-
+  // In per-store database design, Product contains all fields (base + store-specific)
   const testProducts: Product[] = [
     {
       productId: "94427",
@@ -50,6 +35,19 @@ describe("Read-Only SQL Query Execution", () => {
       isSoldByWeight: false,
       isAlcohol: false,
       upc: null,
+      categoryPath: null,
+      tagsFilter: null,
+      tagsPopular: null,
+      priceInStore: 2.99,
+      priceInStoreLoyalty: null,
+      priceDelivery: null,
+      priceDeliveryLoyalty: null,
+      unitPrice: null,
+      aisle: "Dairy",
+      shelf: null,
+      isAvailable: true,
+      isSoldAtStore: true,
+      lastUpdated: null,
     },
     {
       productId: "94428",
@@ -63,6 +61,19 @@ describe("Read-Only SQL Query Execution", () => {
       isSoldByWeight: false,
       isAlcohol: false,
       upc: null,
+      categoryPath: null,
+      tagsFilter: null,
+      tagsPopular: null,
+      priceInStore: 2.79,
+      priceInStoreLoyalty: null,
+      priceDelivery: null,
+      priceDeliveryLoyalty: null,
+      unitPrice: null,
+      aisle: "Dairy",
+      shelf: null,
+      isAvailable: true,
+      isSoldAtStore: true,
+      lastUpdated: null,
     },
     {
       productId: "12345",
@@ -76,6 +87,19 @@ describe("Read-Only SQL Query Execution", () => {
       isSoldByWeight: true,
       isAlcohol: false,
       upc: null,
+      categoryPath: null,
+      tagsFilter: null,
+      tagsPopular: null,
+      priceInStore: 0.69,
+      priceInStoreLoyalty: null,
+      priceDelivery: null,
+      priceDeliveryLoyalty: null,
+      unitPrice: null,
+      aisle: "Produce",
+      shelf: null,
+      isAvailable: true,
+      isSoldAtStore: true,
+      lastUpdated: null,
     },
   ];
 
@@ -86,27 +110,13 @@ describe("Read-Only SQL Query Execution", () => {
     testDbPath = join(testDir, "test.db");
 
     // Create and populate with read-write connection
+    // Using per-store database schema (no separate store_products table)
     db = new Database(testDbPath);
     db.pragma("foreign_keys = ON");
-    initializeSchema(db);
-    upsertStore(db, testStore);
+    initializeStoreDataSchema(db);
 
     for (const product of testProducts) {
       upsertProduct(db, product);
-      upsertStoreProduct(db, {
-        productId: product.productId,
-        storeNumber: "74",
-        priceInStore: product.productId === "94427" ? 2.99 : product.productId === "94428" ? 2.79 : 0.69,
-        priceInStoreLoyalty: null,
-        priceDelivery: null,
-        priceDeliveryLoyalty: null,
-        unitPrice: null,
-        aisle: product.productId.startsWith("944") ? "Dairy" : "Produce",
-        shelf: null,
-        isAvailable: true,
-        isSoldAtStore: true,
-        lastUpdated: null,
-      });
     }
 
     // Open read-only connection for queries
@@ -170,13 +180,13 @@ describe("Read-Only SQL Query Execution", () => {
       expect(result.columns).toContain("name");
     });
 
-    it("handles JOIN queries", () => {
+    it("handles queries with WHERE clause on aisle", () => {
+      // In per-store database, products table has aisle column directly
       const result = executeQuery(
         readonlyDb,
-        `SELECT p.name, sp.price_in_store, sp.aisle
-         FROM products p
-         JOIN store_products sp ON p.product_id = sp.product_id
-         WHERE sp.aisle = ?`,
+        `SELECT name, price_in_store, aisle
+         FROM products
+         WHERE aisle = ?`,
         ["Dairy"]
       );
 
@@ -185,9 +195,10 @@ describe("Read-Only SQL Query Execution", () => {
     });
 
     it("handles aggregate queries", () => {
+      // In per-store database, products table has price_in_store directly
       const result = executeQuery(
         readonlyDb,
-        "SELECT COUNT(*) as total, AVG(price_in_store) as avg_price FROM store_products"
+        "SELECT COUNT(*) as total, AVG(price_in_store) as avg_price FROM products"
       );
 
       expect(result.success).toBe(true);

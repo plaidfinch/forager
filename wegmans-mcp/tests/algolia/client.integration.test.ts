@@ -9,7 +9,6 @@ import { describe, it, expect } from "vitest";
 import {
   searchProducts,
   transformHitToProduct,
-  transformHitToStoreProduct,
 } from "../../src/algolia/client.js";
 
 // Skip in CI - these require network access
@@ -54,23 +53,20 @@ describe.skipIf(SKIP_INTEGRATION)("Algolia Client (integration)", () => {
     expect(result.success).toBe(true);
 
     for (const hit of result.hits) {
+      // In per-store database design, transformHitToProduct returns complete Product
+      // with all fields (base + store-specific pricing/location/availability)
       const product = transformHitToProduct(hit);
-      const storeProduct = transformHitToStoreProduct(hit);
 
       console.log("Product:", {
         id: product.productId,
         name: product.name,
         brand: product.brand,
-      });
-
-      console.log("StoreProduct:", {
-        price: storeProduct.priceInStore,
-        aisle: storeProduct.aisle,
+        priceInStore: product.priceInStore,
+        aisle: product.aisle,
       });
 
       expect(product.productId).toBeTruthy();
       expect(product.name).toBeTruthy();
-      expect(storeProduct.storeNumber).toBe(TEST_STORE_NUMBER);
     }
   });
 

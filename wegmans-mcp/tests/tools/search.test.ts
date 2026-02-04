@@ -6,36 +6,18 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { initializeSchema } from "../../src/db/schema.js";
-import { upsertStore } from "../../src/db/stores.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
 import {
   getProduct,
-  getStoreProduct,
   getServing,
   getNutritionFacts,
 } from "../../src/db/products.js";
 import { searchTool } from "../../src/tools/search.js";
 import type { SearchResult } from "../../src/algolia/client.js";
 import type { AlgoliaProductHit } from "../../src/types/algolia.js";
-import type { Store } from "../../src/types/product.js";
 
 describe("searchTool", () => {
   let db: Database.Database;
-
-  const testStore: Store = {
-    storeNumber: "74",
-    name: "Geneva",
-    city: "Geneva",
-    state: "NY",
-    zipCode: "14456",
-    streetAddress: "300 Hamilton Street",
-    latitude: 42.8647,
-    longitude: -76.9977,
-    hasPickup: true,
-    hasDelivery: true,
-    hasECommerce: true,
-    lastUpdated: null,
-  };
 
   // Mock hit with full data
   const mockHit: AlgoliaProductHit = {
@@ -93,9 +75,9 @@ describe("searchTool", () => {
   };
 
   beforeEach(() => {
+    // Using per-store database schema
     db = new Database(":memory:");
-    initializeSchema(db);
-    upsertStore(db, testStore);
+    initializeStoreDataSchema(db);
   });
 
   afterEach(() => {
@@ -130,7 +112,8 @@ describe("searchTool", () => {
       expect(product?.brand).toBe("Wegmans");
     });
 
-    it("inserts store product data", async () => {
+    it("inserts store-specific product data (pricing/location)", async () => {
+      // In per-store database design, product contains pricing/location fields
       const mockSearchFn = async (): Promise<SearchResult> => ({
         success: true,
         hits: [mockHit],
@@ -146,10 +129,10 @@ describe("searchTool", () => {
         searchFn: mockSearchFn,
       });
 
-      const storeProduct = getStoreProduct(db, "94427", "74");
-      expect(storeProduct).not.toBeNull();
-      expect(storeProduct?.priceInStore).toBe(2.99);
-      expect(storeProduct?.aisle).toBe("Dairy");
+      const product = getProduct(db, "94427");
+      expect(product).not.toBeNull();
+      expect(product?.priceInStore).toBe(2.99);
+      expect(product?.aisle).toBe("Dairy");
     });
 
     it("inserts serving information when present", async () => {

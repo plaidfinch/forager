@@ -9,13 +9,11 @@ import { fetchCatalog, type FetchProgress, type AlgoliaHit } from "./fetch.js";
 import { populateOntology, getOntologyStats } from "./ontology.js";
 import {
   transformHitToProduct,
-  transformHitToStoreProduct,
   transformHitToServing,
   transformHitToNutritionFacts,
 } from "../algolia/client.js";
 import {
   upsertProduct,
-  upsertStoreProduct,
   upsertServing,
   upsertNutritionFacts,
 } from "../db/products.js";
@@ -49,7 +47,10 @@ export type RefreshResult =
 /**
  * Check the current status of the product catalog.
  *
- * @param db - Database connection
+ * In the per-store database design, each store has its own database.
+ * We query the products table directly (no store filter needed).
+ *
+ * @param db - Store database connection
  * @returns Catalog status including staleness
  */
 export function getCatalogStatus(db: Database.Database): CatalogStatus {
@@ -68,10 +69,10 @@ export function getCatalogStatus(db: Database.Database): CatalogStatus {
     };
   }
 
-  // Get most recent last_updated from store_products
+  // Get most recent last_updated from products table
   const lastUpdatedResult = db
     .prepare(
-      "SELECT MAX(last_updated) as last_updated FROM store_products WHERE last_updated IS NOT NULL"
+      "SELECT MAX(last_updated) as last_updated FROM products WHERE last_updated IS NOT NULL"
     )
     .get() as { last_updated: string | null };
 
@@ -132,18 +133,18 @@ export async function refreshCatalog(
   let productsAdded = 0;
 
   // Use transaction for bulk insert
+  // In the per-store database design, we use single transformHitToProduct
+  // which returns complete Product with all fields (base + store-specific).
   const insertProducts = db.transaction((hits: AlgoliaHit[]) => {
     for (const hit of hits) {
-      const product = transformHitToProduct(hit);
-      const storeProduct = {
-        ...transformHitToStoreProduct(hit),
+      const product = {
+        ...transformHitToProduct(hit),
         lastUpdated: now,
       };
       const serving = transformHitToServing(hit);
       const nutritionFacts = transformHitToNutritionFacts(hit);
 
       upsertProduct(db, product);
-      upsertStoreProduct(db, storeProduct);
 
       if (serving) {
         upsertServing(db, serving);

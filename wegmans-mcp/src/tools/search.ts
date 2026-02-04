@@ -11,7 +11,6 @@ import type Database from "better-sqlite3";
 import {
   searchProducts,
   transformHitToProduct,
-  transformHitToStoreProduct,
   transformHitToServing,
   transformHitToNutritionFacts,
   type SearchResult,
@@ -19,7 +18,6 @@ import {
 } from "../algolia/client.js";
 import {
   upsertProduct,
-  upsertStoreProduct,
   upsertServing,
   upsertNutritionFacts,
 } from "../db/products.js";
@@ -95,16 +93,21 @@ export async function searchTool(
   // Process hits and insert into database
   let productsAdded = 0;
 
+  // In the per-store database design, we use single transformHitToProduct
+  // which returns complete Product with all fields (base + store-specific).
+  const now = new Date().toISOString();
+
   for (const hit of searchResult.hits) {
     // Transform hit to domain objects
-    const product = transformHitToProduct(hit);
-    const storeProduct = transformHitToStoreProduct(hit);
+    const product = {
+      ...transformHitToProduct(hit),
+      lastUpdated: now,
+    };
     const serving = transformHitToServing(hit);
     const nutritionFacts = transformHitToNutritionFacts(hit);
 
     // Upsert into database
     upsertProduct(db, product);
-    upsertStoreProduct(db, storeProduct);
 
     if (serving) {
       upsertServing(db, serving);
