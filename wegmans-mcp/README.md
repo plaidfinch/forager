@@ -10,62 +10,33 @@ An MCP (Model Context Protocol) server that provides Claude with queryable acces
 - **Offline Capable**: Data is cached locally in SQLite for fast, offline queries
 - **Auto-Refresh**: Catalog data refreshes automatically when stale (>24 hours)
 
-## Installation
+## Quick Start
 
 ```bash
-# Clone and install
 cd wegmans-mcp
+./install.sh
+```
+
+This installs dependencies, builds, installs Playwright, and adds the server to Claude Code.
+
+Then restart Claude Code and try: "Find Wegmans stores near me"
+
+### Manual Installation
+
+```bash
 npm install
-
-# Build
 npm run build
-
-# Install Playwright browsers (needed for API key extraction)
 npx playwright install chromium
-```
-
-## Configuration
-
-Add to Claude Code using the CLI:
-
-```bash
-# From the wegmans-mcp directory
 claude mcp add --transport stdio wegmans -- node $PWD/dist/src/index.js
-
-# Or specify the absolute path directly
-claude mcp add --transport stdio wegmans -- node /path/to/wegmans-mcp/dist/src/index.js
 ```
 
-To verify it was added:
-
-```bash
-claude mcp list
-claude mcp get wegmans
-```
-
-To remove:
+### Uninstall
 
 ```bash
 claude mcp remove wegmans
 ```
 
-### Alternative: Manual Configuration
-
-Add to `~/.claude.json` (or `.mcp.json` for project-scoped):
-
-```json
-{
-  "mcpServers": {
-    "wegmans": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/path/to/wegmans-mcp/dist/src/index.js"]
-    }
-  }
-}
-```
-
-### Data Location
+## Data Location
 
 Data is stored following the XDG Base Directory Specification:
 
@@ -221,27 +192,14 @@ CREATE VIEW product_tags AS ...;
 ## Development
 
 ```bash
-# Run tests
-npm test
-
-# Watch mode
-npm test:watch
-
-# Build
-npm run build
-
-# Link globally for development
-npm link
-claude mcp add --transport stdio wegmans -- wegmans-mcp
-
-# Explore API (debugging)
-npm run explore
-npm run explore:stores
+npm test           # Run tests
+npm run build      # Build TypeScript
+npm run explore    # Explore Algolia API (debugging)
 ```
 
-### Windows Users
+### Windows
 
-On native Windows, wrap the command with `cmd /c`:
+On native Windows, use `cmd /c` wrapper:
 
 ```bash
 claude mcp add --transport stdio wegmans -- cmd /c node /path/to/wegmans-mcp/dist/src/index.js
