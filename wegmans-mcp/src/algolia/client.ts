@@ -12,7 +12,6 @@ import {
 } from "../types/algolia.js";
 import type {
   Product,
-  StoreProduct,
   Serving,
   NutritionFact,
 } from "../types/product.js";
@@ -169,10 +168,14 @@ function extractLeafCategoryPath(hit: AlgoliaProductHit): string | null {
 }
 
 /**
- * Transform an Algolia hit to a Product domain object.
+ * Transform an Algolia hit to a complete Product domain object.
+ * Includes all base product fields plus store-specific pricing/location/availability.
+ * Note: storeNumber is NOT included in the returned object (not stored in DB)
+ * but is still available on the original hit for API-level operations.
  */
 export function transformHitToProduct(hit: AlgoliaProductHit): Product {
   return {
+    // Base product fields
     productId: getProductId(hit),
     name: hit.productName ?? "",
     brand: hit.consumerBrandName ?? null,
@@ -187,25 +190,23 @@ export function transformHitToProduct(hit: AlgoliaProductHit): Product {
     categoryPath: extractLeafCategoryPath(hit),
     tagsFilter: hit.filterTags ? JSON.stringify(hit.filterTags) : null,
     tagsPopular: hit.popularTags ? JSON.stringify(hit.popularTags) : null,
-  };
-}
 
-/**
- * Transform an Algolia hit to a StoreProduct domain object.
- */
-export function transformHitToStoreProduct(hit: AlgoliaProductHit): StoreProduct {
-  return {
-    productId: getProductId(hit),
-    storeNumber: hit.storeNumber ?? "",
+    // Store-specific pricing fields
     priceInStore: hit.price_inStore?.amount ?? null,
     priceInStoreLoyalty: hit.price_inStoreLoyalty?.amount ?? null,
     priceDelivery: hit.price_delivery?.amount ?? null,
     priceDeliveryLoyalty: hit.price_deliveryLoyalty?.amount ?? null,
     unitPrice: hit.price_inStore?.unitPrice ?? null,
+
+    // Store-specific location fields
     aisle: hit.planogram?.aisle ?? null,
     shelf: hit.planogram?.shelf ?? null,
+
+    // Store-specific availability fields
     isAvailable: hit.isAvailable ?? false,
     isSoldAtStore: hit.isSoldAtStore ?? false,
+
+    // Metadata
     lastUpdated: hit.lastUpdated ?? null,
   };
 }

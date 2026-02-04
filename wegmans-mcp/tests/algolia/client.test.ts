@@ -10,7 +10,6 @@ import {
   buildSearchRequest,
   parseSearchResponse,
   transformHitToProduct,
-  transformHitToStoreProduct,
   transformHitToServing,
   transformHitToNutritionFacts,
   ALGOLIA_APP_ID,
@@ -154,7 +153,7 @@ describe("Algolia Client", () => {
   });
 
   describe("transformHitToProduct", () => {
-    it("extracts product from captured hit", () => {
+    it("extracts complete product from captured hit with all fields", () => {
       const raw = JSON.parse(
         readFileSync(join(SNAPSHOTS_DIR, "response-1-200.json"), "utf-8")
       );
@@ -166,10 +165,40 @@ describe("Algolia Client", () => {
 
       const product = transformHitToProduct(hit);
 
+      // Base product fields
       expect(product.productId).toBeTruthy();
       expect(product.name).toBeTruthy();
       expect(typeof product.isSoldByWeight).toBe("boolean");
       expect(typeof product.isAlcohol).toBe("boolean");
+
+      // Store-specific fields (pricing, location, availability)
+      expect(typeof product.isAvailable).toBe("boolean");
+      expect(typeof product.isSoldAtStore).toBe("boolean");
+
+      // At least one price should be present
+      const hasPrice =
+        product.priceInStore !== null || product.priceDelivery !== null;
+      expect(hasPrice).toBe(true);
+
+      // lastUpdated field should be present (or null)
+      expect("lastUpdated" in product).toBe(true);
+    });
+
+    it("does NOT include storeNumber in returned product", () => {
+      const raw = JSON.parse(
+        readFileSync(join(SNAPSHOTS_DIR, "response-1-200.json"), "utf-8")
+      );
+      const parsed = AlgoliaMultiQueryResponseSchema.parse(raw);
+      const hit = parsed.results[0]?.hits[0];
+
+      expect(hit).toBeDefined();
+      if (!hit) return;
+
+      const product = transformHitToProduct(hit);
+
+      // storeNumber should NOT be in the product object
+      // (it's still used for API calls but not stored in DB)
+      expect("storeNumber" in product).toBe(false);
     });
 
     it("handles missing optional fields", () => {
@@ -182,33 +211,22 @@ describe("Algolia Client", () => {
 
       const product = transformHitToProduct(minimalHit as any);
 
+      // Base fields
       expect(product.productId).toBe("99999");
       expect(product.name).toBe("Test Product");
       expect(product.brand).toBeNull();
       expect(product.description).toBeNull();
-    });
-  });
 
-  describe("transformHitToStoreProduct", () => {
-    it("extracts store product from captured hit", () => {
-      const raw = JSON.parse(
-        readFileSync(join(SNAPSHOTS_DIR, "response-1-200.json"), "utf-8")
-      );
-      const parsed = AlgoliaMultiQueryResponseSchema.parse(raw);
-      const hit = parsed.results[0]?.hits[0];
-
-      expect(hit).toBeDefined();
-      if (!hit) return;
-
-      const storeProduct = transformHitToStoreProduct(hit);
-
-      expect(storeProduct.productId).toBeTruthy();
-      expect(storeProduct.storeNumber).toBeTruthy();
-      expect(typeof storeProduct.isAvailable).toBe("boolean");
-      expect(typeof storeProduct.isSoldAtStore).toBe("boolean");
+      // Store-specific fields default to null/false
+      expect(product.priceInStore).toBeNull();
+      expect(product.priceDelivery).toBeNull();
+      expect(product.aisle).toBeNull();
+      expect(product.isAvailable).toBe(false);
+      expect(product.isSoldAtStore).toBe(false);
+      expect(product.lastUpdated).toBeNull();
     });
 
-    it("extracts pricing fields", () => {
+    it("extracts pricing fields correctly", () => {
       const raw = JSON.parse(
         readFileSync(join(SNAPSHOTS_DIR, "response-1-200.json"), "utf-8")
       );
@@ -217,14 +235,30 @@ describe("Algolia Client", () => {
 
       if (!hit) return;
 
-      const storeProduct = transformHitToStoreProduct(hit);
+      const product = transformHitToProduct(hit);
 
-      // At least one price should be present
-      const hasPrice =
-        storeProduct.priceInStore !== null ||
-        storeProduct.priceDelivery !== null;
+      // Pricing fields should be accessible
+      expect("priceInStore" in product).toBe(true);
+      expect("priceInStoreLoyalty" in product).toBe(true);
+      expect("priceDelivery" in product).toBe(true);
+      expect("priceDeliveryLoyalty" in product).toBe(true);
+      expect("unitPrice" in product).toBe(true);
+    });
 
-      expect(hasPrice).toBe(true);
+    it("extracts location fields correctly", () => {
+      const raw = JSON.parse(
+        readFileSync(join(SNAPSHOTS_DIR, "response-1-200.json"), "utf-8")
+      );
+      const parsed = AlgoliaMultiQueryResponseSchema.parse(raw);
+      const hit = parsed.results[0]?.hits[0];
+
+      if (!hit) return;
+
+      const product = transformHitToProduct(hit);
+
+      // Location fields should be accessible
+      expect("aisle" in product).toBe(true);
+      expect("shelf" in product).toBe(true);
     });
   });
 
