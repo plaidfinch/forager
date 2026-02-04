@@ -1,0 +1,25 @@
+{
+  "name": "wegmans-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for querying Wegmans product data",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "explore": "npx tsx scripts/explore-api.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "playwright": "^1.58.1",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.0",
+    "tsx": "^4.21.0",
+    "vitest": "^4.0.18"
+  }
+}
