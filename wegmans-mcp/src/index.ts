@@ -5,8 +5,10 @@
  * - setStore: Select a store and fetch its catalog
  * - query: Execute read-only SQL queries (schema is embedded in tool description)
  *
- * Store list is fetched on startup and cached in the database.
- * Use SQL to query the stores table for location-based searches.
+ * Multi-database architecture:
+ * - settings.db: API keys and global settings
+ * - stores.db: Store locations (always available for queries)
+ * - stores/{storeNumber}.db: Per-store product data
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -17,20 +19,35 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type Database from "better-sqlite3";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
-  openDatabase,
-  closeDatabase,
-  getDatabase,
+  openDatabases,
+  closeDatabases,
+  getSettingsDb,
+  getStoresDb,
+  getStoreDataDb,
+  openStoreDatabase,
 } from "./db/connection.js";
 import { queryTool } from "./tools/query.js";
 import { schemaTool, type SchemaToolResultExtended } from "./tools/schema.js";
 import { setStoreTool, getActiveStore } from "./tools/setStore.js";
 import { getCatalogStatus, type FetchProgress } from "./catalog/index.js";
 import { getStores } from "./stores/fetch.js";
+
+/**
+ * Get the data directory for storing databases.
+ * Uses XDG_DATA_HOME if set, otherwise defaults to ~/.local/share/wegmans-mcp/
+ */
+export function getDataDir(): string {
+  const xdgDataHome = process.env["XDG_DATA_HOME"];
+  if (xdgDataHome) {
+    return join(xdgDataHome, "wegmans-mcp");
+  }
+  return join(homedir(), ".local", "share", "wegmans-mcp");
+}
 
 /**
  * Format schema result as a string for embedding in tool description.
@@ -44,7 +61,6 @@ function formatSchemaForDescription(schemaResult: SchemaToolResultExtended): str
 
   // Add tables
   if (schemaResult.tables && schemaResult.tables.length > 0) {
-    parts.push("=== Tables ===");
     for (const table of schemaResult.tables) {
       parts.push(table.ddl + ";");
     }
@@ -52,7 +68,7 @@ function formatSchemaForDescription(schemaResult: SchemaToolResultExtended): str
 
   // Add views
   if (schemaResult.views && schemaResult.views.length > 0) {
-    parts.push("\n=== Views ===");
+    parts.push("\n-- Views:");
     for (const view of schemaResult.views) {
       parts.push(view.ddl + ";");
     }
@@ -64,30 +80,48 @@ function formatSchemaForDescription(schemaResult: SchemaToolResultExtended): str
 /**
  * Generate tool definitions with the current database schema embedded.
  *
- * @param db - Optional database connection. If provided, schema is embedded in query tool description.
+ * @param storesDb - Stores database connection (for stores schema)
+ * @param storeDataDb - Store data database connection (for products schema), or null if no store selected
  * @returns Array of tool definitions
  */
-export function getToolDefinitions(db?: Database.Database) {
-  // Get schema if database is available
-  let schemaText = "Database not initialized. Use setStore first.";
-  if (db) {
-    const schemaResult = schemaTool(db);
-    schemaText = formatSchemaForDescription(schemaResult);
+export function getToolDefinitions(storesDb?: Database.Database, storeDataDb?: Database.Database | null) {
+  // Get stores schema (always available)
+  let storesSchemaText = "Stores database not initialized.";
+  if (storesDb) {
+    const storesSchemaResult = schemaTool(storesDb);
+    storesSchemaText = formatSchemaForDescription(storesSchemaResult);
+  }
+
+  // Get products schema (only if store is selected)
+  let productsSchemaText = "No store selected. Use setStore first to select a Wegmans store, then query products.";
+  if (storeDataDb) {
+    const productsSchemaResult = schemaTool(storeDataDb);
+    productsSchemaText = formatSchemaForDescription(productsSchemaResult);
   }
 
   return [
     {
       name: "query",
-      description: `Execute a read-only SQL query against the Wegmans product database. Use this to search, filter, and analyze product data.
+      description: `Execute a read-only SQL query. Use the 'database' parameter to choose:
+- "stores": Query store locations (find store numbers, cities, etc.)
+- "products": Query product catalog for the active store (requires setStore first)
 
-DATABASE SCHEMA:
-${schemaText}`,
+STORES SCHEMA (database="stores"):
+${storesSchemaText}
+
+PRODUCTS SCHEMA (database="products"):
+${productsSchemaText}`,
       inputSchema: {
         type: "object" as const,
         properties: {
           sql: {
             type: "string",
             description: "The SQL SELECT statement to execute",
+          },
+          database: {
+            type: "string",
+            enum: ["stores", "products"],
+            description: 'Which database to query: "stores" for store locations, "products" for product catalog (default: "products")',
           },
         },
         required: ["sql"],
@@ -96,7 +130,7 @@ ${schemaText}`,
     {
       name: "setStore",
       description:
-        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store. Query the stores table to find store numbers and locations.",
+        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store. Query the stores table (database='stores') to find store numbers and locations.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -122,6 +156,9 @@ ${schemaText}`,
  */
 export const TOOL_DEFINITIONS = getToolDefinitions();
 
+// Module-level data directory for use by tool handlers
+let dataDir: string = "";
+
 /**
  * Create and configure the MCP server with tool handlers.
  */
@@ -141,10 +178,17 @@ export function createServer(): Server {
   // Register tool listing handler - dynamically generates schema in query tool description
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
-      const { db } = getDatabase();
-      return { tools: getToolDefinitions(db) };
+      const storesDb = getStoresDb();
+      let storeDataDb: Database.Database | null = null;
+      try {
+        const { readonlyDb } = getStoreDataDb();
+        storeDataDb = readonlyDb;
+      } catch {
+        // No store selected yet
+      }
+      return { tools: getToolDefinitions(storesDb, storeDataDb) };
     } catch {
-      // Database not initialized yet
+      // Databases not initialized yet
       return { tools: getToolDefinitions() };
     }
   });
@@ -154,11 +198,10 @@ export function createServer(): Server {
     const { name, arguments: args } = request.params;
 
     try {
-      const { db, readonlyDb } = getDatabase();
-
       switch (name) {
         case "query": {
-          const sql = (args as { sql?: string }).sql;
+          const { sql, database = "products" } = args as { sql?: string; database?: "stores" | "products" };
+
           if (typeof sql !== "string") {
             return {
               content: [
@@ -166,10 +209,36 @@ export function createServer(): Server {
               ],
             };
           }
-          const result = queryTool(readonlyDb, sql);
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-          };
+
+          // Choose which database to query
+          if (database === "stores") {
+            const storesDb = getStoresDb();
+            const result = queryTool(storesDb, sql);
+            return {
+              content: [{ type: "text", text: JSON.stringify(result) }],
+            };
+          } else {
+            // database === "products" (default)
+            try {
+              const { readonlyDb } = getStoreDataDb();
+              const result = queryTool(readonlyDb, sql);
+              return {
+                content: [{ type: "text", text: JSON.stringify(result) }],
+              };
+            } catch {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      success: false,
+                      error: "No store selected. Use setStore first to select a Wegmans store.",
+                    }),
+                  },
+                ],
+              };
+            }
+          }
         }
 
         case "setStore": {
@@ -197,11 +266,20 @@ export function createServer(): Server {
             process.stderr.write(`[wegmans-mcp] ${progress.message}\n`);
           };
 
-          const result = await setStoreTool(db, {
+          const settingsDb = getSettingsDb();
+          const storesDb = getStoresDb();
+
+          const result = await setStoreTool(dataDir, settingsDb, storesDb, {
             storeNumber,
             ...(forceRefresh !== undefined ? { forceRefresh } : {}),
             onProgress,
           });
+
+          // If successful, also open the store database for queries
+          if (result.success) {
+            openStoreDatabase(dataDir, storeNumber);
+          }
+
           return {
             content: [{ type: "text", text: JSON.stringify(result) }],
           };
@@ -237,29 +315,6 @@ export function createServer(): Server {
 }
 
 /**
- * Get the default database path.
- * Uses WEGMANS_MCP_DB_PATH env var if set, otherwise ~/.wegmans-mcp/data.db
- */
-export function getDefaultDbPath(): string {
-  if (process.env["WEGMANS_MCP_DB_PATH"]) {
-    return process.env["WEGMANS_MCP_DB_PATH"];
-  }
-
-  const dataDir = join(homedir(), ".wegmans-mcp");
-  return join(dataDir, "data.db");
-}
-
-/**
- * Ensure the data directory exists.
- */
-function ensureDataDir(dbPath: string): void {
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-}
-
-/**
  * Log to stderr (since stdout is used for MCP JSON-RPC).
  */
 function log(message: string): void {
@@ -269,34 +324,42 @@ function log(message: string): void {
 /**
  * Report catalog status on startup.
  */
-function reportCatalogStatus(db: Database.Database): void {
-  const activeStore = getActiveStore(db);
-  const status = getCatalogStatus(db);
+function reportCatalogStatus(): void {
+  const settingsDb = getSettingsDb();
+  const activeStore = getActiveStore(settingsDb);
 
   if (!activeStore) {
     log("No store selected. Use setStore tool to select a Wegmans store.");
     return;
   }
 
-  if (status.isEmpty) {
-    log(`Store ${activeStore} selected but no products loaded. Use setStore to refresh.`);
-  } else if (status.isStale) {
-    log(
-      `Store ${activeStore}: ${status.productCount} products (stale - last updated ${status.lastUpdated?.toISOString()})`
-    );
-  } else {
-    log(
-      `Store ${activeStore}: ${status.productCount} products (fresh - last updated ${status.lastUpdated?.toISOString()})`
-    );
+  try {
+    const { db: storeDb } = getStoreDataDb();
+    const status = getCatalogStatus(storeDb);
+
+    if (status.isEmpty) {
+      log(`Store ${activeStore} selected but no products loaded. Use setStore to refresh.`);
+    } else if (status.isStale) {
+      log(
+        `Store ${activeStore}: ${status.productCount} products (stale - last updated ${status.lastUpdated?.toISOString()})`
+      );
+    } else {
+      log(
+        `Store ${activeStore}: ${status.productCount} products (fresh - last updated ${status.lastUpdated?.toISOString()})`
+      );
+    }
+  } catch {
+    log(`Store ${activeStore} selected but database not opened yet.`);
   }
 }
 
 /**
  * Refresh stores cache on startup if stale.
  */
-async function refreshStoresIfNeeded(db: Database.Database): Promise<void> {
+async function refreshStoresIfNeeded(): Promise<void> {
   try {
-    const { stores, fromCache, error } = await getStores(db);
+    const storesDb = getStoresDb();
+    const { stores, fromCache, error } = await getStores(storesDb);
     if (error) {
       log(`Stores: ${stores.length} (${error})`);
     } else if (fromCache) {
@@ -310,23 +373,51 @@ async function refreshStoresIfNeeded(db: Database.Database): Promise<void> {
 }
 
 /**
+ * Restore active store from settings on startup.
+ */
+function restoreActiveStore(): void {
+  try {
+    const settingsDb = getSettingsDb();
+    const activeStore = getActiveStore(settingsDb);
+
+    if (activeStore) {
+      // Check if store database exists
+      const storePath = join(dataDir, "stores", `${activeStore}.db`);
+      if (existsSync(storePath)) {
+        openStoreDatabase(dataDir, activeStore);
+        log(`Restored active store: ${activeStore}`);
+      } else {
+        log(`Active store ${activeStore} database not found. Use setStore to reload.`);
+      }
+    }
+  } catch (err) {
+    log(`Failed to restore active store: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Main entry point - starts the MCP server.
  */
 async function main(): Promise<void> {
-  const dbPath = getDefaultDbPath();
+  // Get data directory
+  dataDir = getDataDir();
 
   // Ensure data directory exists
-  ensureDataDir(dbPath);
+  if (!existsSync(dataDir)) {
+    mkdirSync(dataDir, { recursive: true });
+  }
 
-  // Open database connection
-  openDatabase(dbPath);
-  const { db } = getDatabase();
+  // Open database connections
+  openDatabases(dataDir);
+
+  // Restore active store from settings
+  restoreActiveStore();
 
   // Refresh stores cache if needed
-  await refreshStoresIfNeeded(db);
+  await refreshStoresIfNeeded();
 
   // Report catalog status
-  reportCatalogStatus(db);
+  reportCatalogStatus();
 
   // Create and start server
   const server = createServer();
@@ -334,12 +425,12 @@ async function main(): Promise<void> {
 
   // Handle graceful shutdown
   process.on("SIGINT", () => {
-    closeDatabase();
+    closeDatabases();
     process.exit(0);
   });
 
   process.on("SIGTERM", () => {
-    closeDatabase();
+    closeDatabases();
     process.exit(0);
   });
 
@@ -354,7 +445,7 @@ const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
 if (isMainModule) {
   main().catch((err) => {
     console.error("Server error:", err);
-    closeDatabase();
+    closeDatabases();
     process.exit(1);
   });
 }

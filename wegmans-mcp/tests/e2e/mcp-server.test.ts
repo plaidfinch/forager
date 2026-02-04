@@ -4,6 +4,11 @@
  * Tests the MCP server by spawning it as a child process and communicating
  * via the MCP SDK client over stdio. This validates the full protocol flow.
  *
+ * Multi-database architecture:
+ * - settings.db: API keys and global settings
+ * - stores.db: Store locations (always available)
+ * - stores/{storeNumber}.db: Per-store product data
+ *
  * Run with: npm test -- tests/e2e/mcp-server.test.ts
  */
 
@@ -23,21 +28,20 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
   let client: Client;
   let transport: StdioClientTransport;
   let testDir: string;
-  let testDbPath: string;
 
   beforeEach(async () => {
     // Create temp directory for test database
     testDir = join(tmpdir(), `wegmans-mcp-e2e-${randomUUID()}`);
     mkdirSync(testDir, { recursive: true });
-    testDbPath = join(testDir, "test.db");
 
     // Create transport to spawn server process
+    // Use XDG_DATA_HOME to point to our test directory
     transport = new StdioClientTransport({
       command: "node",
       args: [join(process.cwd(), "dist/src/index.js")],
       env: {
         ...process.env,
-        WEGMANS_MCP_DB_PATH: testDbPath,
+        XDG_DATA_HOME: testDir,
       },
     });
 
@@ -75,18 +79,24 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(toolNames).toContain("setStore");
     });
 
-    it("query tool has correct schema with embedded database schema", async () => {
+    it("query tool has correct schema with database parameter", async () => {
       const result = await client.listTools();
 
       const queryTool = result.tools.find((t) => t.name === "query");
       expect(queryTool).toBeDefined();
       expect(queryTool?.description).toContain("SQL");
-      expect(queryTool?.description).toContain("DATABASE SCHEMA:");
+      expect(queryTool?.description).toContain("STORES SCHEMA");
+      expect(queryTool?.description).toContain("PRODUCTS SCHEMA");
       expect(queryTool?.description).toContain("CREATE TABLE");
       expect(queryTool?.inputSchema).toEqual({
         type: "object",
         properties: {
           sql: { type: "string", description: expect.any(String) },
+          database: {
+            type: "string",
+            enum: ["stores", "products"],
+            description: expect.any(String),
+          },
         },
         required: ["sql"],
       });
@@ -110,27 +120,59 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
   });
 
   describe("query tool", () => {
-    it("executes SELECT query via MCP protocol", async () => {
+    it("queries stores database with database='stores'", async () => {
+      // Stores are fetched and cached on server startup
+      const result = await client.callTool({
+        name: "query",
+        arguments: {
+          sql: "SELECT name, city, state FROM stores ORDER BY CAST(store_number AS INTEGER) LIMIT 3",
+          database: "stores",
+        },
+      });
+
+      const response = JSON.parse((result.content[0] as { text: string }).text);
+
+      expect(response.success).toBe(true);
+      expect(response.columns).toEqual(["name", "city", "state"]);
+      expect(response.rowCount).toBeGreaterThan(0);
+    });
+
+    it("returns error when querying products without store selected", async () => {
+      const result = await client.callTool({
+        name: "query",
+        arguments: {
+          sql: "SELECT COUNT(*) as count FROM products",
+          database: "products",
+        },
+      });
+
+      const response = JSON.parse((result.content[0] as { text: string }).text);
+
+      expect(response.success).toBe(false);
+      expect(response.error).toContain("No store selected");
+      expect(response.error).toContain("setStore");
+    });
+
+    it("defaults to products database when database parameter not specified", async () => {
+      // Without database parameter, should try products (and fail since no store selected)
       const result = await client.callTool({
         name: "query",
         arguments: { sql: "SELECT COUNT(*) as count FROM products" },
       });
 
-      expect(result.content).toHaveLength(1);
-      expect(result.content[0]).toHaveProperty("type", "text");
-
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
-      expect(response.success).toBe(true);
-      expect(response.columns).toEqual(["count"]);
-      expect(response.rows).toHaveLength(1);
-      expect(response.rows[0]).toEqual({ count: 0 });
+      expect(response.success).toBe(false);
+      expect(response.error).toContain("No store selected");
     });
 
-    it("returns error for invalid SQL", async () => {
+    it("returns error for invalid SQL on stores database", async () => {
       const result = await client.callTool({
         name: "query",
-        arguments: { sql: "SELEKT * FROM products" },
+        arguments: {
+          sql: "SELEKT * FROM stores",
+          database: "stores",
+        },
       });
 
       const response = JSON.parse((result.content[0] as { text: string }).text);
@@ -140,11 +182,12 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.error).toContain("syntax");
     });
 
-    it("rejects non-SELECT statements", async () => {
+    it("rejects non-SELECT statements on stores database", async () => {
       const result = await client.callTool({
         name: "query",
         arguments: {
-          sql: "INSERT INTO products (product_id, name, is_sold_by_weight, is_alcohol) VALUES ('1', 'Test', 0, 0)",
+          sql: "INSERT INTO stores (store_number, name) VALUES ('999', 'Test')",
+          database: "stores",
         },
       });
 
@@ -154,20 +197,22 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.error).toBeDefined();
     });
 
-    it("queries stores table (populated on startup)", async () => {
-      // Stores are fetched and cached on server startup
+    it("can count stores in the stores database", async () => {
       const result = await client.callTool({
         name: "query",
         arguments: {
-          sql: "SELECT name, city, state FROM stores ORDER BY CAST(store_number AS INTEGER) LIMIT 3",
+          sql: "SELECT COUNT(*) as count FROM stores",
+          database: "stores",
         },
       });
 
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
       expect(response.success).toBe(true);
-      expect(response.columns).toEqual(["name", "city", "state"]);
-      expect(response.rowCount).toBeGreaterThan(0);
+      expect(response.columns).toEqual(["count"]);
+      expect(response.rows).toHaveLength(1);
+      // Should have stores fetched on startup
+      expect(response.rows[0].count).toBeGreaterThan(0);
     });
   });
 
