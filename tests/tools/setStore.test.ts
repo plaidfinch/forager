@@ -499,6 +499,7 @@ describe("setStoreTool", () => {
               categoriesAdded: 0,
               tagsAdded: 0,
               error: "Algolia error: 401 Unauthorized",
+              status: 401,
             };
           }
           // Second call succeeds with new credentials
@@ -571,6 +572,7 @@ describe("setStoreTool", () => {
               categoriesAdded: 0,
               tagsAdded: 0,
               error: "Algolia error: 403 Forbidden",
+              status: 403,
             };
           }
           return { success: true, productsAdded: 100, categoriesAdded: 10, tagsAdded: 5 };
@@ -623,6 +625,7 @@ describe("setStoreTool", () => {
             categoriesAdded: 0,
             tagsAdded: 0,
             error: "Algolia error: 401 Unauthorized",
+            status: 401,
           };
         }
       );

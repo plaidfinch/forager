@@ -42,6 +42,8 @@ export type RefreshResult =
       categoriesAdded: number;
       tagsAdded: number;
       error: string;
+      /** HTTP status code if the error was from an HTTP response */
+      status?: number;
     };
 
 /**
@@ -119,6 +121,7 @@ export async function refreshCatalog(
       categoriesAdded: 0,
       tagsAdded: 0,
       error: fetchResult.error,
+      status: fetchResult.status,
     };
   }
 

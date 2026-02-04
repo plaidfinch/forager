@@ -53,6 +53,19 @@ interface SplitTask {
   filter: string | null;
 }
 
+/**
+ * Custom error class that preserves HTTP status code from Algolia responses.
+ */
+class AlgoliaError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number
+  ) {
+    super(message);
+    this.name = "AlgoliaError";
+  }
+}
+
 export interface FetchProgress {
   phase: "planning" | "fetching";
   current: number;
@@ -75,6 +88,8 @@ export type FetchResult =
       totalProducts: number;
       coverage: number;
       error: string;
+      /** HTTP status code if the error was from an HTTP response */
+      status?: number;
     };
 
 /** Split array into chunks of size n */
@@ -162,7 +177,7 @@ async function algoliaQuery(
 ): Promise<AlgoliaResult> {
   const result = await algoliaQueryWithStatus(apiKey, appId, storeNumber, options);
   if (!result.success) {
-    throw new Error(result.error);
+    throw new AlgoliaError(result.error, result.status);
   }
   return result.result;
 }
@@ -423,6 +438,7 @@ export async function fetchCatalog(
       totalProducts: 0,
       coverage: 0,
       error: err instanceof Error ? err.message : String(err),
+      status: err instanceof AlgoliaError ? err.status : undefined,
     };
   }
 }

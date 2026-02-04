@@ -134,10 +134,10 @@ function clearApiCredentials(settingsDb: Database.Database): void {
 }
 
 /**
- * Check if an error message indicates an authentication failure (401/403).
+ * Check if an HTTP status code indicates an authentication failure (401/403).
  */
-function isAuthError(error: string): boolean {
-  return error.includes("401") || error.includes("403");
+function isAuthError(status: number | undefined): boolean {
+  return status === 401 || status === 403;
 }
 
 /**
@@ -273,7 +273,7 @@ export async function setStoreTool(
 
       if (!result.success) {
         // Check if this is an auth error (401/403) - credentials may be expired
-        if (isAuthError(result.error)) {
+        if (isAuthError(result.status)) {
           // Clear old credentials and try extracting fresh ones
           clearApiCredentials(settingsDb);
 
