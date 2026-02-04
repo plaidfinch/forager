@@ -29,8 +29,9 @@ describe("Database Schema", () => {
 
     const tableNames = tables.map((t) => t.name).sort();
 
-    // All 8 tables
+    // All 9 tables
     expect(tableNames).toContain("api_keys");
+    expect(tableNames).toContain("settings");
     expect(tableNames).toContain("stores");
     expect(tableNames).toContain("products");
     expect(tableNames).toContain("store_products");
@@ -39,7 +40,7 @@ describe("Database Schema", () => {
     expect(tableNames).toContain("categories");
     expect(tableNames).toContain("tags");
 
-    expect(tableNames).toHaveLength(8);
+    expect(tableNames).toHaveLength(9);
   });
 
   it("is idempotent - can be called multiple times without error", () => {
@@ -332,7 +333,7 @@ describe("Database Schema", () => {
     expect(popularTags.map((t) => t.tag_name)).toEqual(["Wegmans Brand"]);
   });
 
-  it("includes categories and tags tables in total count", () => {
+  it("includes categories, tags, and settings tables in total count", () => {
     initializeSchema(db);
 
     const tables = db
@@ -341,7 +342,7 @@ describe("Database Schema", () => {
       )
       .all() as Array<{ name: string }>;
 
-    // Original 6 + categories + tags = 8
-    expect(tables.length).toBe(8);
+    // Original 6 + categories + tags + settings = 9
+    expect(tables.length).toBe(9);
   });
 });

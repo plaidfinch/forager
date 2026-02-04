@@ -27,6 +27,14 @@ export function initializeSchema(db: Database.Database): void {
     )
   `);
 
+  // Settings/metadata (key-value store)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+
   // Stores table
   db.exec(`
     CREATE TABLE IF NOT EXISTS stores (

@@ -42,7 +42,7 @@ describe("schemaTool", () => {
 
     expect(result.success).toBe(true);
     expect(result.tables).toBeDefined();
-    expect(result.tables).toHaveLength(8); // Schema has exactly 8 tables
+    expect(result.tables).toHaveLength(9); // Schema has exactly 9 tables
     expect(result.error).toBeUndefined();
   });
 
@@ -72,7 +72,7 @@ describe("schemaTool", () => {
     expect(tableNames).toContain("nutrition_facts");
   });
 
-  it("returns all 8 expected tables", () => {
+  it("returns all 9 expected tables", () => {
     const result = schemaTool(db);
 
     expect(result.success).toBe(true);
@@ -82,6 +82,7 @@ describe("schemaTool", () => {
 
     // All tables defined in src/db/schema.ts
     expect(tableNames).toContain("api_keys");
+    expect(tableNames).toContain("settings");
     expect(tableNames).toContain("stores");
     expect(tableNames).toContain("products");
     expect(tableNames).toContain("store_products");
@@ -90,7 +91,7 @@ describe("schemaTool", () => {
     expect(tableNames).toContain("categories");
     expect(tableNames).toContain("tags");
 
-    expect(result.tables).toHaveLength(8);
+    expect(result.tables).toHaveLength(9);
   });
 
   it("DDL includes column definitions", () => {

@@ -29,11 +29,9 @@ import { queryTool } from "./tools/query.js";
 import { schemaTool } from "./tools/schema.js";
 import { searchTool } from "./tools/search.js";
 import { refreshApiKeyTool } from "./tools/refreshApiKey.js";
-import {
-  getCatalogStatus,
-  refreshCatalogIfNeeded,
-  type FetchProgress,
-} from "./catalog/index.js";
+import { setStoreTool, getActiveStore } from "./tools/setStore.js";
+import { listStoresTool } from "./tools/listStores.js";
+import { getCatalogStatus, type FetchProgress } from "./catalog/index.js";
 
 /**
  * Tool definitions for the MCP server.
@@ -106,6 +104,43 @@ export const TOOL_DEFINITIONS = [
         },
       },
       required: ["storeName"],
+    },
+  },
+  {
+    name: "setStore",
+    description:
+      "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        storeNumber: {
+          type: "string",
+          description:
+            "Wegmans store number (e.g., '74' for Geneva, NY). Use listStores to find store numbers.",
+        },
+        forceRefresh: {
+          type: "boolean",
+          description:
+            "Force a full catalog refresh even if data exists (default: false)",
+        },
+      },
+      required: ["storeNumber"],
+    },
+  },
+  {
+    name: "listStores",
+    description:
+      "List available Wegmans stores with their store numbers. Use this to find the store number for setStore.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        showAll: {
+          type: "boolean",
+          description:
+            "If true, show all known stores. If false, only show stores in local database (default: true)",
+        },
+      },
+      required: [] as string[],
     },
   },
 ];
@@ -252,6 +287,67 @@ export function createServer(): Server {
           };
         }
 
+        case "setStore": {
+          const { storeNumber, forceRefresh } = args as {
+            storeNumber?: string;
+            forceRefresh?: boolean;
+          };
+
+          if (typeof storeNumber !== "string") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    success: false,
+                    error: "Missing required parameter: storeNumber",
+                  }),
+                },
+              ],
+            };
+          }
+
+          // Get API key from database
+          const apiKey = getApiKeyFromDatabase(db);
+          if (!apiKey) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    success: false,
+                    error:
+                      "No API key found. Use refreshApiKey tool first to extract one.",
+                  }),
+                },
+              ],
+            };
+          }
+
+          const onProgress = (progress: FetchProgress) => {
+            // Log progress to stderr
+            process.stderr.write(`[wegmans-mcp] ${progress.message}\n`);
+          };
+
+          const result = await setStoreTool(db, {
+            storeNumber,
+            apiKey,
+            forceRefresh,
+            onProgress,
+          });
+          return {
+            content: [{ type: "text", text: JSON.stringify(result) }],
+          };
+        }
+
+        case "listStores": {
+          const { showAll } = args as { showAll?: boolean };
+          const result = listStoresTool(db, showAll ?? true);
+          return {
+            content: [{ type: "text", text: JSON.stringify(result) }],
+          };
+        }
+
         default:
           return {
             content: [
@@ -305,12 +401,6 @@ function ensureDataDir(dbPath: string): void {
 }
 
 /**
- * Default store number (Geneva, NY).
- * Can be overridden with WEGMANS_STORE_NUMBER env var.
- */
-const DEFAULT_STORE_NUMBER = "74";
-
-/**
  * Log to stderr (since stdout is used for MCP JSON-RPC).
  */
 function log(message: string): void {
@@ -318,69 +408,33 @@ function log(message: string): void {
 }
 
 /**
- * Check catalog freshness and refresh if needed.
- * - Blocks on first population (empty catalog)
- * - Refreshes in background when stale (non-blocking)
- *
- * @param db - Database connection
- * @param storeNumber - Store number to fetch
+ * Report catalog status on startup.
  */
-async function ensureFreshCatalog(
-  db: Database.Database,
-  storeNumber: string
-): Promise<void> {
+function reportCatalogStatus(db: Database.Database): void {
+  const activeStore = getActiveStore(db);
   const status = getCatalogStatus(db);
+  const hasApiKey = getApiKeyFromDatabase(db) !== null;
 
-  if (!status.isEmpty && !status.isStale) {
-    log(
-      `Catalog OK: ${status.productCount} products, last updated ${status.lastUpdated?.toISOString()}`
-    );
+  if (!hasApiKey) {
+    log("No API key configured. Use refreshApiKey tool first.");
     return;
   }
 
-  // Need API key to refresh
-  const apiKey = getApiKeyFromDatabase(db);
-  if (!apiKey) {
-    if (status.isEmpty) {
-      log("Warning: Catalog empty but no API key available. Use refreshApiKey tool first.");
-    } else {
-      log(
-        `Warning: Catalog stale (${status.productCount} products from ${status.lastUpdated?.toISOString()}) but no API key. Use refreshApiKey tool to update.`
-      );
-    }
+  if (!activeStore) {
+    log("No store selected. Use setStore tool to select a Wegmans store.");
     return;
   }
-
-  const onProgress = (progress: FetchProgress) => {
-    log(`  ${progress.message}`);
-  };
-
-  const doRefresh = async () => {
-    const result = await refreshCatalogIfNeeded(db, apiKey, storeNumber, onProgress);
-
-    if (result) {
-      if (result.success) {
-        log(
-          `Catalog refreshed: ${result.productsAdded} products, ${result.categoriesAdded} categories, ${result.tagsAdded} tags`
-        );
-      } else {
-        log(`Warning: Catalog refresh failed: ${result.error}`);
-      }
-    }
-  };
 
   if (status.isEmpty) {
-    // Block on first population - server isn't useful without data
-    log("Catalog empty, fetching full catalog (blocking)...");
-    await doRefresh();
-  } else {
-    // Background refresh when stale - don't block server startup
+    log(`Store ${activeStore} selected but no products loaded. Use setStore to refresh.`);
+  } else if (status.isStale) {
     log(
-      `Catalog stale (last updated ${status.lastUpdated?.toISOString()}), refreshing in background...`
+      `Store ${activeStore}: ${status.productCount} products (stale - last updated ${status.lastUpdated?.toISOString()})`
     );
-    doRefresh().catch((err) => {
-      log(`Warning: Background catalog refresh failed: ${err instanceof Error ? err.message : err}`);
-    });
+  } else {
+    log(
+      `Store ${activeStore}: ${status.productCount} products (fresh - last updated ${status.lastUpdated?.toISOString()})`
+    );
   }
 }
 
@@ -389,7 +443,6 @@ async function ensureFreshCatalog(
  */
 async function main(): Promise<void> {
   const dbPath = getDefaultDbPath();
-  const storeNumber = process.env["WEGMANS_STORE_NUMBER"] ?? DEFAULT_STORE_NUMBER;
 
   // Ensure data directory exists
   ensureDataDir(dbPath);
@@ -398,12 +451,8 @@ async function main(): Promise<void> {
   openDatabase(dbPath);
   const { db } = getDatabase();
 
-  // Check catalog freshness and refresh if needed
-  try {
-    await ensureFreshCatalog(db, storeNumber);
-  } catch (err) {
-    log(`Warning: Catalog check failed: ${err instanceof Error ? err.message : err}`);
-  }
+  // Report catalog status
+  reportCatalogStatus(db);
 
   // Create and start server
   const server = createServer();

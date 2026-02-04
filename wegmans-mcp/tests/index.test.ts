@@ -34,8 +34,8 @@ describe("MCP Server", () => {
   });
 
   describe("TOOL_DEFINITIONS", () => {
-    it("defines 4 tools", () => {
-      expect(TOOL_DEFINITIONS).toHaveLength(4);
+    it("defines 6 tools", () => {
+      expect(TOOL_DEFINITIONS).toHaveLength(6);
     });
 
     it("defines query tool with sql input", () => {
