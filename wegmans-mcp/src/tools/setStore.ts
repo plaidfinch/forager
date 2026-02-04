@@ -22,16 +22,20 @@ export interface SetStoreOptions {
   onProgress?: (progress: FetchProgress) => void;
 }
 
-export interface SetStoreResult {
-  success: boolean;
-  storeNumber: string;
-  /** Whether a catalog refresh was performed */
-  refreshed: boolean;
-  /** Number of products in catalog for this store */
-  productCount: number;
-  /** Error message if failed */
-  error?: string;
-}
+export type SetStoreResult =
+  | {
+      success: true;
+      storeNumber: string;
+      refreshed: boolean;
+      productCount: number;
+    }
+  | {
+      success: false;
+      storeNumber: string;
+      refreshed: boolean;
+      productCount: number;
+      error: string;
+    };
 
 /**
  * Get the currently active store number.

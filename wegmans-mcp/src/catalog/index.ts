@@ -31,13 +31,20 @@ export interface CatalogStatus {
   lastUpdated: Date | null;
 }
 
-export interface RefreshResult {
-  success: boolean;
-  productsAdded: number;
-  categoriesAdded: number;
-  tagsAdded: number;
-  error?: string;
-}
+export type RefreshResult =
+  | {
+      success: true;
+      productsAdded: number;
+      categoriesAdded: number;
+      tagsAdded: number;
+    }
+  | {
+      success: false;
+      productsAdded: number;
+      categoriesAdded: number;
+      tagsAdded: number;
+      error: string;
+    };
 
 /**
  * Check the current status of the product catalog.

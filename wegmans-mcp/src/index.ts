@@ -213,7 +213,7 @@ export function createServer(): Server {
 
           const result = await setStoreTool(db, {
             storeNumber,
-            forceRefresh,
+            ...(forceRefresh !== undefined ? { forceRefresh } : {}),
             onProgress,
           });
           return {

@@ -24,7 +24,6 @@ const DEFAULT_STORE = "74";
 const CONCURRENCY = 30;          // Parallel requests during fetch phase
 const BASE_DELAY_MS = 20;        // Base delay between batches
 const MAX_BACKOFF_MS = 30000;    // Max delay on rate limit
-const PLANNING_DELAY_MS = 30;    // Delay during planning phase (sequential)
 
 interface AlgoliaHit {
   objectID: string;
@@ -64,20 +63,17 @@ interface QueryOptions {
   facets?: string[];
 }
 
-interface QueryResult {
-  success: boolean;
-  status: number;
-  result?: AlgoliaResult;
-  error?: string;
-}
+type QueryResult =
+  | { success: true; status: number; result: AlgoliaResult }
+  | { success: false; status: number; error: string };
 
 async function algoliaQuery(
   storeNumber: string,
   options: QueryOptions
 ): Promise<AlgoliaResult> {
   const result = await algoliaQueryWithStatus(storeNumber, options);
-  if (!result.success || !result.result) {
-    throw new Error(result.error ?? `Algolia error: ${result.status}`);
+  if (!result.success) {
+    throw new Error(result.error);
   }
   return result.result;
 }
@@ -121,10 +117,18 @@ async function algoliaQueryWithStatus(
     }
 
     const data = (await response.json()) as AlgoliaResponse;
+    const result = data.results[0];
+    if (!result) {
+      return {
+        success: false,
+        status: 200,
+        error: "No results returned from Algolia",
+      };
+    }
     return {
       success: true,
       status: 200,
-      result: data.results[0],
+      result,
     };
   } catch (err) {
     return {
@@ -245,7 +249,7 @@ async function main() {
 
     // Get count and facets for this filter
     const result = await algoliaQuery(storeNumber, {
-      filters: task.filter ?? undefined,
+      ...(task.filter ? { filters: task.filter } : {}),
       hitsPerPage: 0,
       facets: ["*"],
     });
@@ -339,7 +343,7 @@ async function main() {
     const results = await Promise.all(
       batch.map(async (task) => {
         const result = await algoliaQueryWithStatus(storeNumber, {
-          filters: task.filter ?? undefined,
+          ...(task.filter ? { filters: task.filter } : {}),
           hitsPerPage: MAX_HITS_PER_QUERY,
         });
         return { task, result };
@@ -358,11 +362,11 @@ async function main() {
       // Retry rate-limited queries sequentially
       for (const { task } of rateLimited) {
         const retryResult = await algoliaQueryWithStatus(storeNumber, {
-          filters: task.filter ?? undefined,
+          ...(task.filter ? { filters: task.filter } : {}),
           hitsPerPage: MAX_HITS_PER_QUERY,
         });
 
-        if (retryResult.success && retryResult.result) {
+        if (retryResult.success) {
           for (const hit of retryResult.result.hits) {
             const id = hit.productId ?? hit.productID ?? hit.objectID;
             if (!products.has(id)) {
@@ -383,13 +387,11 @@ async function main() {
     for (const { task, result } of results) {
       if (result.status === 429) continue; // Already handled above
 
-      if (result.success && result.result) {
-        let newCount = 0;
+      if (result.success) {
         for (const hit of result.result.hits) {
           const id = hit.productId ?? hit.productID ?? hit.objectID;
           if (!products.has(id)) {
             products.set(id, hit);
-            newCount++;
           }
         }
 

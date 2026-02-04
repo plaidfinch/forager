@@ -44,12 +44,9 @@ interface QueryOptions {
   facets?: string[];
 }
 
-interface QueryResult {
-  success: boolean;
-  status: number;
-  result?: AlgoliaResult;
-  error?: string;
-}
+type QueryResult =
+  | { success: true; status: number; result: AlgoliaResult }
+  | { success: false; status: number; error: string };
 
 interface SplitTask {
   name: string;
@@ -63,14 +60,22 @@ export interface FetchProgress {
   message: string;
 }
 
-export interface FetchResult {
-  success: boolean;
-  products: AlgoliaHit[];
-  queryCount: number;
-  totalProducts: number;
-  coverage: number;
-  error?: string;
-}
+export type FetchResult =
+  | {
+      success: true;
+      products: AlgoliaHit[];
+      queryCount: number;
+      totalProducts: number;
+      coverage: number;
+    }
+  | {
+      success: false;
+      products: AlgoliaHit[];
+      queryCount: number;
+      totalProducts: number;
+      coverage: number;
+      error: string;
+    };
 
 /** Split array into chunks of size n */
 function chunk<T>(arr: T[], n: number): T[][] {
@@ -127,10 +132,18 @@ async function algoliaQueryWithStatus(
     }
 
     const data = (await response.json()) as AlgoliaResponse;
+    const result = data.results[0];
+    if (!result) {
+      return {
+        success: false,
+        status: 200,
+        error: "No results returned from Algolia",
+      };
+    }
     return {
       success: true,
       status: 200,
-      result: data.results[0],
+      result,
     };
   } catch (err) {
     return {
@@ -148,8 +161,8 @@ async function algoliaQuery(
   options: QueryOptions
 ): Promise<AlgoliaResult> {
   const result = await algoliaQueryWithStatus(apiKey, appId, storeNumber, options);
-  if (!result.success || !result.result) {
-    throw new Error(result.error ?? `Algolia error: ${result.status}`);
+  if (!result.success) {
+    throw new Error(result.error);
   }
   return result.result;
 }
@@ -261,7 +274,7 @@ export async function fetchCatalog(
       });
 
       const result = await algoliaQuery(apiKey, appId, storeNumber, {
-        filters: task.filter ?? undefined,
+        ...(task.filter ? { filters: task.filter } : {}),
         hitsPerPage: 0,
         facets: ["*"],
       });
@@ -335,7 +348,7 @@ export async function fetchCatalog(
       const results = await Promise.all(
         batch.map(async (task) => {
           const result = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
-            filters: task.filter ?? undefined,
+            ...(task.filter ? { filters: task.filter } : {}),
             hitsPerPage: MAX_HITS_PER_QUERY,
           });
           return { task, result };
@@ -349,11 +362,11 @@ export async function fetchCatalog(
 
         for (const { task } of rateLimited) {
           const retryResult = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
-            filters: task.filter ?? undefined,
+            ...(task.filter ? { filters: task.filter } : {}),
             hitsPerPage: MAX_HITS_PER_QUERY,
           });
 
-          if (retryResult.success && retryResult.result) {
+          if (retryResult.success) {
             for (const hit of retryResult.result.hits) {
               const id = hit.productId ?? hit.productID ?? hit.objectID;
               if (!products.has(id)) {
@@ -372,17 +385,15 @@ export async function fetchCatalog(
       for (const { result } of results) {
         if (result.status === 429) continue;
 
-        if (result.success && result.result) {
+        if (result.success) {
           for (const hit of result.result.hits) {
             const id = hit.productId ?? hit.productID ?? hit.objectID;
             if (!products.has(id)) {
               products.set(id, hit);
             }
           }
-          completed++;
-        } else {
-          completed++;
         }
+        completed++;
       }
 
       report({

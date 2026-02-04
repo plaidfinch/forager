@@ -23,10 +23,12 @@ export function upsertProduct(db: Database.Database, product: Product): void {
   const stmt = db.prepare(`
     INSERT INTO products (
       product_id, name, brand, description, pack_size,
-      image_url, ingredients, allergens, is_sold_by_weight, is_alcohol, upc
+      image_url, ingredients, allergens, is_sold_by_weight, is_alcohol, upc,
+      category_path, tags_filter, tags_popular
     ) VALUES (
       @productId, @name, @brand, @description, @packSize,
-      @imageUrl, @ingredients, @allergens, @isSoldByWeight, @isAlcohol, @upc
+      @imageUrl, @ingredients, @allergens, @isSoldByWeight, @isAlcohol, @upc,
+      @categoryPath, @tagsFilter, @tagsPopular
     )
     ON CONFLICT(product_id) DO UPDATE SET
       name = excluded.name,
@@ -38,7 +40,10 @@ export function upsertProduct(db: Database.Database, product: Product): void {
       allergens = excluded.allergens,
       is_sold_by_weight = excluded.is_sold_by_weight,
       is_alcohol = excluded.is_alcohol,
-      upc = excluded.upc
+      upc = excluded.upc,
+      category_path = excluded.category_path,
+      tags_filter = excluded.tags_filter,
+      tags_popular = excluded.tags_popular
   `);
 
   stmt.run({
@@ -53,6 +58,9 @@ export function upsertProduct(db: Database.Database, product: Product): void {
     isSoldByWeight: product.isSoldByWeight ? 1 : 0,
     isAlcohol: product.isAlcohol ? 1 : 0,
     upc: product.upc,
+    categoryPath: product.categoryPath,
+    tagsFilter: product.tagsFilter,
+    tagsPopular: product.tagsPopular,
   });
 }
 
@@ -68,6 +76,9 @@ interface ProductRow {
   is_sold_by_weight: number;
   is_alcohol: number;
   upc: string | null;
+  category_path: string | null;
+  tags_filter: string | null;
+  tags_popular: string | null;
 }
 
 function rowToProduct(row: ProductRow): Product {
@@ -83,6 +94,9 @@ function rowToProduct(row: ProductRow): Product {
     isSoldByWeight: row.is_sold_by_weight === 1,
     isAlcohol: row.is_alcohol === 1,
     upc: row.upc,
+    categoryPath: row.category_path,
+    tagsFilter: row.tags_filter,
+    tagsPopular: row.tags_popular,
   };
 }
 

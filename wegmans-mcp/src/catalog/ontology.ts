@@ -23,7 +23,7 @@ interface TagInfo {
  * Extract all category paths from a hit's categories object.
  */
 function extractCategories(hit: AlgoliaHit): CategoryInfo[] {
-  const categories = hit.categories as
+  const categories = hit["categories"] as
     | { lvl0?: string; lvl1?: string; lvl2?: string; lvl3?: string; lvl4?: string }
     | undefined;
 
@@ -51,14 +51,14 @@ function extractCategories(hit: AlgoliaHit): CategoryInfo[] {
 function extractTags(hit: AlgoliaHit): TagInfo[] {
   const result: TagInfo[] = [];
 
-  const filterTags = hit.filterTags as string[] | undefined;
+  const filterTags = hit["filterTags"] as string[] | undefined;
   if (filterTags) {
     for (const name of filterTags) {
       result.push({ name, type: "filter" });
     }
   }
 
-  const popularTags = hit.popularTags as string[] | undefined;
+  const popularTags = hit["popularTags"] as string[] | undefined;
   if (popularTags) {
     for (const name of popularTags) {
       result.push({ name, type: "popular" });
