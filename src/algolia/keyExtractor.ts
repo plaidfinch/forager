@@ -109,6 +109,12 @@ export async function extractAlgoliaKey(
     let appId: string | null = null;
     let storeNumber: string | null = null;
 
+    // Promise that resolves when we capture the API key
+    let resolveKeyCapture: () => void;
+    const keyCaptured = new Promise<void>((resolve) => {
+      resolveKeyCapture = resolve;
+    });
+
     // Intercept Algolia requests
     await page.route("**/*algolia*/**", async (route) => {
       const request = route.request();
@@ -132,6 +138,11 @@ export async function extractAlgoliaKey(
         storeNumber = extractedStore;
       }
 
+      // Signal that we've captured the key
+      if (apiKey && appId) {
+        resolveKeyCapture();
+      }
+
       await route.continue();
     });
 
@@ -141,17 +152,18 @@ export async function extractAlgoliaKey(
       timeout,
     });
 
-    // Wait a bit for initial page load
-    await page.waitForTimeout(2000);
-
     // Navigate to search page to trigger Algolia queries
     await page.goto("https://www.wegmans.com/shop/search?query=milk", {
       waitUntil: "domcontentloaded",
       timeout,
     });
 
-    // Wait for Algolia requests to complete
-    await page.waitForTimeout(5000);
+    // Wait for key capture or timeout (max 10 seconds after page load)
+    const maxWaitMs = 10000;
+    await Promise.race([
+      keyCaptured,
+      new Promise((resolve) => setTimeout(resolve, maxWaitMs)),
+    ]);
 
     await browser.close();
     browser = null;
