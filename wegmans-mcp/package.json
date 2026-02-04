@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc",
     "explore": "npx tsx scripts/explore-api.ts",
+    "explore:stores": "npx tsx scripts/explore-stores.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

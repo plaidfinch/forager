@@ -28,8 +28,20 @@ Exploration script version: 0cff491
   - Filter string: `storeNumber:74 AND fulfilmentType:instore AND excludeFromWeb:false AND isSoldAtStore:true`
   - Analytics tags: `store-74`, `fulfillment-instore`
   - Object IDs: `74-94427`, `74-12238` (format: `{storeNumber}-{skuId}`)
-- Conclusion: Store number is embedded in object IDs and used as a filter. **UNKNOWN which store 74 corresponds to** - the browser selected this store automatically (likely via geolocation or cookies). No store name was observed in API responses.
-- Action needed: Explore `/stores` page or store selector to build store number → name mapping.
+- Conclusion: Store number is embedded in object IDs and used as a filter.
+
+### Store 74 Identity (CONFIRMED)
+- Observed: `/api/stores` endpoint returns full store list with metadata
+- Evidence: stores-exploration.json shows store 74 entry:
+  - `storeNumber: 74`
+  - `name: "Geneva"`
+  - `city: "Geneva"`
+  - `stateAbbreviation: "NY"`
+  - `zip: "14456"`
+  - `streetAddress: "300 Hamilton Street"`
+  - `key: "74-GENEVA"`
+  - `slug: "geneva-ny"`
+- Conclusion: **Store 74 is confirmed to be the Geneva, NY Wegmans** at 300 Hamilton Street, 14456.
 
 ### Response Schema
 - Observed: Multi-query response structure with nested results array
@@ -72,9 +84,20 @@ Four distinct price points per product:
 - `price_delivery` - Delivery price
 - `price_deliveryLoyalty` - Shoppers Club member delivery price
 
+## Discovered Endpoints
+
+### `/api/stores` - Store List API
+- Returns complete list of all Wegmans stores with metadata
+- Fields include: `storeNumber`, `name`, `city`, `stateAbbreviation`, `zip`, `streetAddress`, `latitude`, `longitude`, `hasPickup`, `hasDelivery`, `hasECommerce`, `hasPharmacy`, `aislePositionMapping`
+- Can be used to build store number → location mapping for the MCP server
+
+### `/api/stores/store-number/{storeNumber}` - Single Store API
+- Returns details for a specific store by number
+- Example: `/api/stores/store-number/74` for Geneva
+
 ## Open Questions
 
-1. **Store number → name mapping (BLOCKING)**: Store 74 was used in queries but we don't know which physical store this is. Need to explore `/stores` page or store selector UI to build the mapping. This blocks using the correct store for Geneva, NY.
+1. ~~**Store number → name mapping (BLOCKING)**~~: RESOLVED - `/api/stores` provides complete mapping.
 2. **Category browsing**: How to browse by category without a search query?
 3. **Pagination**: Default `hitsPerPage` appears to be 20. What's the maximum allowed?
 4. **Rate limiting**: No rate limit errors observed, but should test with higher request volumes.
