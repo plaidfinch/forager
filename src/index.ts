@@ -40,14 +40,14 @@ import { getStores } from "./stores/fetch.js";
 
 /**
  * Get the data directory for storing databases.
- * Uses XDG_DATA_HOME if set, otherwise defaults to ~/.local/share/wegmans-mcp/
+ * Uses XDG_DATA_HOME if set, otherwise defaults to ~/.local/share/forager/
  */
 export function getDataDir(): string {
   const xdgDataHome = process.env["XDG_DATA_HOME"];
   if (xdgDataHome) {
-    return join(xdgDataHome, "wegmans-mcp");
+    return join(xdgDataHome, "forager");
   }
-  return join(homedir(), ".local", "share", "wegmans-mcp");
+  return join(homedir(), ".local", "share", "forager");
 }
 
 /**
@@ -166,7 +166,7 @@ let dataDir: string = "";
 export function createServer(): Server {
   const server = new Server(
     {
-      name: "wegmans-mcp",
+      name: "forager",
       version: "0.1.0",
     },
     {
@@ -264,7 +264,7 @@ export function createServer(): Server {
 
           const onProgress = (progress: FetchProgress) => {
             // Log progress to stderr
-            process.stderr.write(`[wegmans-mcp] ${progress.message}\n`);
+            process.stderr.write(`[forager] ${progress.message}\n`);
           };
 
           const settingsDb = getSettingsDb();
@@ -319,7 +319,7 @@ export function createServer(): Server {
  * Log to stderr (since stdout is used for MCP JSON-RPC).
  */
 function log(message: string): void {
-  process.stderr.write(`[wegmans-mcp] ${message}\n`);
+  process.stderr.write(`[forager] ${message}\n`);
 }
 
 /**

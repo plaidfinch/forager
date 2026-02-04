@@ -1,4 +1,4 @@
-# Wegmans MCP Server
+# Forager
 
 An MCP (Model Context Protocol) server that provides Claude with queryable access to Wegmans product inventory, prices, aisle locations, and nutritional information.
 
@@ -13,7 +13,7 @@ An MCP (Model Context Protocol) server that provides Claude with queryable acces
 ## Quick Start
 
 ```bash
-cd wegmans-mcp
+cd forager
 ./install.sh
 ```
 
@@ -27,13 +27,13 @@ Then restart Claude Code and try: "Find Wegmans stores near me"
 npm install
 npm run build
 npx playwright install chromium
-claude mcp add --transport stdio wegmans -- node $PWD/dist/src/index.js
+claude mcp add --transport stdio forager -- node $PWD/dist/src/index.js
 ```
 
 ### Uninstall
 
 ```bash
-claude mcp remove wegmans
+claude mcp remove forager
 ```
 
 ## Data Location
@@ -41,7 +41,7 @@ claude mcp remove wegmans
 Data is stored following the XDG Base Directory Specification:
 
 ```
-~/.local/share/wegmans-mcp/    # or $XDG_DATA_HOME/wegmans-mcp/
+~/.local/share/forager/    # or $XDG_DATA_HOME/forager/
   settings.db        # API keys, active store setting
   stores.db          # Store locations (from Wegmans API)
   stores/
@@ -202,7 +202,7 @@ npm run explore    # Explore Algolia API (debugging)
 On native Windows, use `cmd /c` wrapper:
 
 ```bash
-claude mcp add --transport stdio wegmans -- cmd /c node /path/to/wegmans-mcp/dist/src/index.js
+claude mcp add --transport stdio forager -- cmd /c node /path/to/forager/dist/src/index.js
 ```
 
 ## Architecture

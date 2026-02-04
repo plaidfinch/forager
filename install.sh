@@ -13,8 +13,8 @@ echo "Installing Playwright browser..."
 npx playwright install chromium
 
 echo "Adding to Claude Code..."
-claude mcp add --transport stdio wegmans -- node "$PWD/dist/src/index.js"
+claude mcp add --transport stdio forager -- node "$PWD/dist/src/index.js"
 
 echo ""
-echo "Done! Restart Claude Code to use the wegmans MCP server."
+echo "Done! Restart Claude Code to use the forager MCP server."
 echo "Try: \"Find Wegmans stores in New York\""
