@@ -1,6 +1,7 @@
 # Categories & Tags Feature Design
 
 Date: 2026-02-04
+Updated: 2026-02-04 (reflects current implementation)
 
 ## Goal
 
@@ -12,36 +13,140 @@ Add category and tag support to enable:
 ## Philosophy
 
 - **Algolia populates, SQL queries** - Use broad Algolia searches to populate the local SQLite mirror, then use SQL for filtering/joins/aggregations
-- **Full catalog on startup** - Scrape entire catalog if DB is empty or stale (> 1 day)
-- **Claude should be aware** local data reflects a point-in-time snapshot; prices/availability may have changed
+- **Full catalog on setStore** - Scrape entire catalog when store is selected (if empty or stale)
+- **Dynamic credentials** - API key and app ID are extracted from Wegmans website, not hardcoded
+- **Schema in tool description** - Database schema is embedded in the query tool description so Claude doesn't need a separate tool call
 
-## Database Schema Changes
+## MCP Tools API
 
-### New columns on `products` table
+The server exposes 3 tools:
 
-```sql
-ALTER TABLE products ADD COLUMN category_path TEXT;
-ALTER TABLE products ADD COLUMN tags_filter TEXT;   -- JSON array
-ALTER TABLE products ADD COLUMN tags_popular TEXT;  -- JSON array
+### `listStores`
+List available Wegmans stores with their store numbers.
+
+```typescript
+interface ListStoresParams {
+  showAll?: boolean;  // default: true, shows all ~75 known stores
+}
 ```
 
-- `category_path`: Full leaf path, e.g., "Dairy > Milk > Whole Milk"
-- `tags_filter`: JSON array, e.g., `["Gluten Free", "Organic"]`
-- `tags_popular`: JSON array, e.g., `["Wegmans Brand", "Family Pack"]`
+### `setStore`
+Set the active store and fetch its catalog. Call this first.
 
-### Ontology reference tables
+```typescript
+interface SetStoreParams {
+  storeNumber: string;    // e.g., "74" for Geneva, NY
+  forceRefresh?: boolean; // Force re-fetch even if data exists
+}
+```
+
+On first call for a store:
+1. Extracts API credentials from Wegmans website (if not cached)
+2. Fetches full catalog (~29,000 products)
+3. Populates ontology tables (categories, tags)
+
+### `query`
+Execute read-only SQL against the product database.
+
+```typescript
+interface QueryParams {
+  sql: string;  // SELECT statement only
+}
+```
+
+The tool description includes the full database schema (all CREATE TABLE/VIEW statements), so Claude can write correct queries without needing to call a separate schema tool.
+
+## Database Schema
+
+### Core tables
 
 ```sql
-CREATE TABLE IF NOT EXISTS categories (
-  path TEXT PRIMARY KEY,
+-- Settings (stores active_store)
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- Wegmans store locations
+CREATE TABLE stores (
+  store_number TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  level INTEGER NOT NULL,
+  city TEXT,
+  state TEXT,
+  ...
+);
+
+-- Product metadata (store-independent)
+CREATE TABLE products (
+  product_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  brand TEXT,
+  description TEXT,
+  pack_size TEXT,
+  image_url TEXT,
+  ingredients TEXT,
+  allergens TEXT,
+  is_sold_by_weight INTEGER NOT NULL DEFAULT 0,
+  is_alcohol INTEGER NOT NULL DEFAULT 0,
+  upc TEXT,
+  category_path TEXT,      -- e.g., "Dairy > Milk > Whole Milk"
+  tags_filter TEXT,        -- JSON array: ["Gluten Free", "Organic"]
+  tags_popular TEXT        -- JSON array: ["Wegmans Brand"]
+);
+
+-- Store-specific pricing and availability
+CREATE TABLE store_products (
+  product_id TEXT NOT NULL,
+  store_number TEXT NOT NULL,
+  price_in_store REAL,
+  price_in_store_loyalty REAL,
+  price_delivery REAL,
+  price_delivery_loyalty REAL,
+  unit_price TEXT,
+  aisle TEXT,
+  shelf TEXT,
+  is_available INTEGER NOT NULL DEFAULT 0,
+  is_sold_at_store INTEGER NOT NULL DEFAULT 0,
+  last_updated TEXT,
+  PRIMARY KEY (product_id, store_number)
+);
+
+-- Serving information
+CREATE TABLE servings (
+  product_id TEXT PRIMARY KEY,
+  serving_size TEXT,
+  serving_size_unit TEXT,
+  servings_per_container TEXT,
+  household_measurement TEXT
+);
+
+-- Nutrition facts (multiple per product)
+CREATE TABLE nutrition_facts (
+  product_id TEXT NOT NULL,
+  nutrient TEXT NOT NULL,
+  quantity REAL,
+  unit TEXT,
+  percent_daily REAL,
+  category TEXT NOT NULL CHECK (category IN ('general', 'vitamin')),
+  PRIMARY KEY (product_id, nutrient)
+);
+```
+
+### Ontology tables
+
+```sql
+-- Category hierarchy reference
+CREATE TABLE categories (
+  path TEXT PRIMARY KEY,       -- e.g., "Dairy > Milk > Whole Milk"
+  name TEXT NOT NULL,          -- e.g., "Whole Milk"
+  level INTEGER NOT NULL,      -- 0-4
   product_count INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS tags (
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
+-- Tags reference
+CREATE TABLE tags (
+  name TEXT NOT NULL,          -- e.g., "Gluten Free"
+  type TEXT NOT NULL,          -- "filter" or "popular"
   product_count INTEGER,
   PRIMARY KEY (name, type)
 );
@@ -50,12 +155,14 @@ CREATE TABLE IF NOT EXISTS tags (
 ### Views for relational queries
 
 ```sql
-CREATE VIEW IF NOT EXISTS product_categories AS
+-- Simple category lookup
+CREATE VIEW product_categories AS
 SELECT product_id, category_path
 FROM products
 WHERE category_path IS NOT NULL;
 
-CREATE VIEW IF NOT EXISTS product_tags AS
+-- Unpacks JSON tag arrays for joins
+CREATE VIEW product_tags AS
 SELECT product_id, value as tag_name, 'filter' as tag_type
 FROM products, json_each(tags_filter)
 WHERE tags_filter IS NOT NULL
@@ -65,11 +172,32 @@ FROM products, json_each(tags_popular)
 WHERE tags_popular IS NOT NULL;
 ```
 
+## API Credential Extraction
+
+Credentials are extracted dynamically from the Wegmans website using Playwright:
+
+1. Navigate to wegmans.com
+2. Intercept network requests to Algolia
+3. Extract API key and app ID from request headers
+4. Cache in `api_keys` table for reuse
+
+```sql
+CREATE TABLE api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  extracted_at TEXT NOT NULL,
+  expires_at TEXT
+);
+```
+
+This happens automatically on first `setStore` call if no credentials are cached.
+
 ## Full Catalog Scrape
 
-**When:** Server startup, if:
-- Products table is empty, OR
-- Last scrape was > 1 day ago (check `last_updated` in metadata or products)
+**Trigger:** `setStore` tool call, if:
+- No products for that store, OR
+- Last scrape was > 1 day ago
 
 **Algorithm:**
 1. Start with all products for the store
@@ -79,109 +207,43 @@ WHERE tags_popular IS NOT NULL;
 5. Execute all leaf queries with concurrency, deduplicate by productId
 6. Back off exponentially if rate-limited (429 response)
 
-**Performance:**
+**Performance (benchmarked):**
 - ~156 queries for full catalog
 - ~29,000 products (98.1% coverage)
-- ~15-20 seconds with concurrency (vs 45s sequential)
-- Remaining 2% are nameless POS placeholder items (not useful for users)
+- ~15-20 seconds with concurrency
+- Remaining 2% are nameless POS placeholder items
 
-**Concurrency & Rate Limiting:**
+**Concurrency settings:**
 ```typescript
-const CONCURRENCY = 5;          // Parallel requests
-const BASE_DELAY = 50;          // ms between batches
-const MAX_BACKOFF = 30000;      // Max delay on rate limit
-
-async function fetchWithBackoff(queries: Query[]): Promise<Result[]> {
-  let delay = BASE_DELAY;
-
-  for (const batch of chunk(queries, CONCURRENCY)) {
-    const results = await Promise.all(batch.map(q => fetchQuery(q)));
-
-    if (results.some(r => r.status === 429)) {
-      delay = Math.min(delay * 2, MAX_BACKOFF);
-      console.log(`Rate limited, backing off ${delay}ms`);
-      await sleep(delay);
-      // Retry failed queries...
-    } else {
-      delay = BASE_DELAY;  // Reset on success
-    }
-
-    await sleep(delay);
-  }
-}
-```
-
-## Ontology Population
-
-Ontology (categories and tags reference tables) is populated as part of the full catalog scrape.
-
-The initial facet query returns:
-- ~1,141 category paths across 4 levels
-- ~22 filter tags, ~8 popular tags
-- Product counts for each
-
-These are inserted into the `categories` and `tags` tables for Claude to reference.
-
-## Search Tool Changes
-
-Add optional `filters` parameter for raw Algolia filter strings:
-
-```typescript
-interface SearchToolParams {
-  query: string;
-  storeNumber?: string;
-  hitsPerPage?: number;
-  page?: number;
-  filters?: string;  // Optional Algolia filter string
-}
-```
-
-**Examples:**
-- `filterTags:Organic`
-- `categories.lvl0:Dairy AND filterTags:"Gluten Free"`
-- `consumerBrandName:Wegmans`
-
-**Merge with base filters:**
-```typescript
-const baseFilters = `storeNumber:${storeNumber} AND isSoldAtStore:true`;
-const finalFilters = filters ? `${baseFilters} AND ${filters}` : baseFilters;
-```
-
-## Transform Updates
-
-Extract category and tags when transforming Algolia hits:
-
-```typescript
-function extractLeafCategoryPath(hit: AlgoliaProductHit): string | null {
-  const cats = hit.categories;
-  if (!cats) return null;
-  return cats.lvl4 ?? cats.lvl3 ?? cats.lvl2 ?? cats.lvl1 ?? cats.lvl0 ?? null;
-}
-
-// In transformHitToProduct:
-categoryPath: extractLeafCategoryPath(hit),
-tagsFilter: hit.filterTags ? JSON.stringify(hit.filterTags) : null,
-tagsPopular: hit.popularTags ? JSON.stringify(hit.popularTags) : null,
+const CONCURRENCY = 30;       // Parallel requests during fetch
+const BASE_DELAY_MS = 20;     // Base delay between batches
+const MAX_BACKOFF_MS = 30000; // Max delay on rate limit
 ```
 
 ## Query Examples
 
 **Products in Dairy (any subcategory):**
 ```sql
-SELECT p.* FROM products p
-WHERE p.category_path LIKE 'Dairy%';
+SELECT p.name, p.brand, sp.price_in_store
+FROM products p
+JOIN store_products sp ON p.product_id = sp.product_id
+WHERE p.category_path LIKE 'Dairy%'
+ORDER BY p.name;
 ```
 
 **Gluten-free products:**
 ```sql
-SELECT p.* FROM products p
+SELECT p.name, p.brand
+FROM products p
 JOIN product_tags pt ON p.product_id = pt.product_id
 WHERE pt.tag_name = 'Gluten Free';
 ```
 
 **Organic dairy products:**
 ```sql
-SELECT p.* FROM products p
+SELECT p.name, sp.price_in_store
+FROM products p
+JOIN store_products sp ON p.product_id = sp.product_id
 JOIN product_tags pt ON p.product_id = pt.product_id
 WHERE p.category_path LIKE 'Dairy%'
   AND pt.tag_name = 'Organic';
@@ -189,42 +251,41 @@ WHERE p.category_path LIKE 'Dairy%'
 
 **What categories exist:**
 ```sql
-SELECT path, product_count FROM categories ORDER BY path;
+SELECT path, product_count
+FROM categories
+ORDER BY path;
 ```
 
 **What tags exist:**
 ```sql
-SELECT name, type, product_count FROM tags ORDER BY product_count DESC;
+SELECT name, type, product_count
+FROM tags
+ORDER BY product_count DESC;
 ```
 
-## Snapshot Coverage
+**Products with nutrition info:**
+```sql
+SELECT p.name, nf.nutrient, nf.quantity, nf.unit
+FROM products p
+JOIN nutrition_facts nf ON p.product_id = nf.product_id
+WHERE p.name LIKE '%milk%'
+  AND nf.nutrient = 'Protein';
+```
 
-One-time capture script with diverse queries:
+## Implementation Status
 
-| Query | Purpose |
-|-------|---------|
-| `""` (empty) | Browse all, full facets |
-| `"milk"` | Common search term |
-| `"wine"` | Alcohol products |
-| `"deli meat"` | Sold-by-weight products |
-| `"vitamins"` | OTC/restricted items |
-| `filters: categories.lvl0:Frozen` | Category filter |
-| `filters: categories.lvl0:Cheese` | Different category |
-| `filters: filterTags:Organic` | Tag filter |
-| `filters: filterTags:Vegan` | Different tag |
-| `"xyznonexistent"` | No results |
-| `page: 99` | Pagination beyond data |
-| `hitsPerPage: 1` | Minimal response |
+- [x] Database schema (products, store_products, categories, tags, views)
+- [x] Product type and Zod schema with category/tag fields
+- [x] Transform functions extract category/tags from Algolia hits
+- [x] Ontology population on catalog fetch
+- [x] Dynamic API credential extraction
+- [x] setStore/listStores tools
+- [x] Schema embedded in query tool description
+- [x] TypeScript strict mode compliance (discriminated unions)
+- [x] Tests passing (197 tests)
 
-## Implementation Tasks
+## Context & References
 
-1. Update database schema (new columns, ontology tables, views)
-2. Update Product type and Zod schema
-3. Update transform functions to extract category/tags
-4. Implement ontology population function
-5. Call ontology population on server startup
-6. Add `filters` parameter to search tool
-7. Update schema tool to document filterable fields
-8. Create snapshot capture script
-9. Run capture script, commit snapshots
-10. Update/add tests for new functionality
+- Algolia API: Products indexed at `QGPPR19V8V-dsn.algolia.net`
+- Facets: `categories.lvl0-4`, `filterTags`, `popularTags`
+- Store list: ~75 stores across NY, PA, NJ, MD, VA, MA, NC
