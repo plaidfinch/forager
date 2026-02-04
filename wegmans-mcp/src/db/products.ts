@@ -1,13 +1,14 @@
 /**
  * Product CRUD operations.
  *
- * Handles products, store_products, servings, and nutrition_facts tables.
+ * Handles products, servings, and nutrition_facts tables.
+ * Uses per-store database schema where products table contains all fields
+ * (merged product + store-specific data). No store_products table.
  */
 
 import type Database from "better-sqlite3";
 import type {
   Product,
-  StoreProduct,
   Serving,
   NutritionFact,
 } from "../types/product.js";
@@ -17,18 +18,23 @@ import type {
 // ============================================================================
 
 /**
- * Insert or update a product.
+ * Insert or update a product with all fields (base + store-specific).
+ * In per-store database design, each store has its own database.
  */
 export function upsertProduct(db: Database.Database, product: Product): void {
   const stmt = db.prepare(`
     INSERT INTO products (
       product_id, name, brand, description, pack_size,
       image_url, ingredients, allergens, is_sold_by_weight, is_alcohol, upc,
-      category_path, tags_filter, tags_popular
+      category_path, tags_filter, tags_popular,
+      price_in_store, price_in_store_loyalty, price_delivery, price_delivery_loyalty,
+      unit_price, aisle, shelf, is_available, is_sold_at_store, last_updated
     ) VALUES (
       @productId, @name, @brand, @description, @packSize,
       @imageUrl, @ingredients, @allergens, @isSoldByWeight, @isAlcohol, @upc,
-      @categoryPath, @tagsFilter, @tagsPopular
+      @categoryPath, @tagsFilter, @tagsPopular,
+      @priceInStore, @priceInStoreLoyalty, @priceDelivery, @priceDeliveryLoyalty,
+      @unitPrice, @aisle, @shelf, @isAvailable, @isSoldAtStore, @lastUpdated
     )
     ON CONFLICT(product_id) DO UPDATE SET
       name = excluded.name,
@@ -43,7 +49,17 @@ export function upsertProduct(db: Database.Database, product: Product): void {
       upc = excluded.upc,
       category_path = excluded.category_path,
       tags_filter = excluded.tags_filter,
-      tags_popular = excluded.tags_popular
+      tags_popular = excluded.tags_popular,
+      price_in_store = excluded.price_in_store,
+      price_in_store_loyalty = excluded.price_in_store_loyalty,
+      price_delivery = excluded.price_delivery,
+      price_delivery_loyalty = excluded.price_delivery_loyalty,
+      unit_price = excluded.unit_price,
+      aisle = excluded.aisle,
+      shelf = excluded.shelf,
+      is_available = excluded.is_available,
+      is_sold_at_store = excluded.is_sold_at_store,
+      last_updated = excluded.last_updated
   `);
 
   stmt.run({
@@ -61,6 +77,17 @@ export function upsertProduct(db: Database.Database, product: Product): void {
     categoryPath: product.categoryPath,
     tagsFilter: product.tagsFilter,
     tagsPopular: product.tagsPopular,
+    // Store-specific fields
+    priceInStore: product.priceInStore,
+    priceInStoreLoyalty: product.priceInStoreLoyalty,
+    priceDelivery: product.priceDelivery,
+    priceDeliveryLoyalty: product.priceDeliveryLoyalty,
+    unitPrice: product.unitPrice,
+    aisle: product.aisle,
+    shelf: product.shelf,
+    isAvailable: product.isAvailable == null ? null : (product.isAvailable ? 1 : 0),
+    isSoldAtStore: product.isSoldAtStore == null ? null : (product.isSoldAtStore ? 1 : 0),
+    lastUpdated: product.lastUpdated,
   });
 }
 
@@ -79,6 +106,17 @@ interface ProductRow {
   category_path: string | null;
   tags_filter: string | null;
   tags_popular: string | null;
+  // Store-specific columns
+  price_in_store: number | null;
+  price_in_store_loyalty: number | null;
+  price_delivery: number | null;
+  price_delivery_loyalty: number | null;
+  unit_price: string | null;
+  aisle: string | null;
+  shelf: string | null;
+  is_available: number | null;
+  is_sold_at_store: number | null;
+  last_updated: string | null;
 }
 
 function rowToProduct(row: ProductRow): Product {
@@ -97,6 +135,17 @@ function rowToProduct(row: ProductRow): Product {
     categoryPath: row.category_path,
     tagsFilter: row.tags_filter,
     tagsPopular: row.tags_popular,
+    // Store-specific fields
+    priceInStore: row.price_in_store,
+    priceInStoreLoyalty: row.price_in_store_loyalty,
+    priceDelivery: row.price_delivery,
+    priceDeliveryLoyalty: row.price_delivery_loyalty,
+    unitPrice: row.unit_price,
+    aisle: row.aisle,
+    shelf: row.shelf,
+    isAvailable: row.is_available == null ? null : row.is_available === 1,
+    isSoldAtStore: row.is_sold_at_store == null ? null : row.is_sold_at_store === 1,
+    lastUpdated: row.last_updated,
   };
 }
 
@@ -122,120 +171,6 @@ export function deleteProduct(db: Database.Database, productId: string): boolean
   const result = stmt.run(productId);
 
   return result.changes > 0;
-}
-
-// ============================================================================
-// Store Products
-// ============================================================================
-
-/**
- * Insert or update store-specific product data.
- */
-export function upsertStoreProduct(db: Database.Database, sp: StoreProduct): void {
-  const stmt = db.prepare(`
-    INSERT INTO store_products (
-      product_id, store_number, price_in_store, price_in_store_loyalty,
-      price_delivery, price_delivery_loyalty, unit_price,
-      aisle, shelf, is_available, is_sold_at_store, last_updated
-    ) VALUES (
-      @productId, @storeNumber, @priceInStore, @priceInStoreLoyalty,
-      @priceDelivery, @priceDeliveryLoyalty, @unitPrice,
-      @aisle, @shelf, @isAvailable, @isSoldAtStore, @lastUpdated
-    )
-    ON CONFLICT(product_id, store_number) DO UPDATE SET
-      price_in_store = excluded.price_in_store,
-      price_in_store_loyalty = excluded.price_in_store_loyalty,
-      price_delivery = excluded.price_delivery,
-      price_delivery_loyalty = excluded.price_delivery_loyalty,
-      unit_price = excluded.unit_price,
-      aisle = excluded.aisle,
-      shelf = excluded.shelf,
-      is_available = excluded.is_available,
-      is_sold_at_store = excluded.is_sold_at_store,
-      last_updated = excluded.last_updated
-  `);
-
-  stmt.run({
-    productId: sp.productId,
-    storeNumber: sp.storeNumber,
-    priceInStore: sp.priceInStore,
-    priceInStoreLoyalty: sp.priceInStoreLoyalty,
-    priceDelivery: sp.priceDelivery,
-    priceDeliveryLoyalty: sp.priceDeliveryLoyalty,
-    unitPrice: sp.unitPrice,
-    aisle: sp.aisle,
-    shelf: sp.shelf,
-    isAvailable: sp.isAvailable ? 1 : 0,
-    isSoldAtStore: sp.isSoldAtStore ? 1 : 0,
-    lastUpdated: sp.lastUpdated,
-  });
-}
-
-interface StoreProductRow {
-  product_id: string;
-  store_number: string;
-  price_in_store: number | null;
-  price_in_store_loyalty: number | null;
-  price_delivery: number | null;
-  price_delivery_loyalty: number | null;
-  unit_price: string | null;
-  aisle: string | null;
-  shelf: string | null;
-  is_available: number;
-  is_sold_at_store: number;
-  last_updated: string | null;
-}
-
-function rowToStoreProduct(row: StoreProductRow): StoreProduct {
-  return {
-    productId: row.product_id,
-    storeNumber: row.store_number,
-    priceInStore: row.price_in_store,
-    priceInStoreLoyalty: row.price_in_store_loyalty,
-    priceDelivery: row.price_delivery,
-    priceDeliveryLoyalty: row.price_delivery_loyalty,
-    unitPrice: row.unit_price,
-    aisle: row.aisle,
-    shelf: row.shelf,
-    isAvailable: row.is_available === 1,
-    isSoldAtStore: row.is_sold_at_store === 1,
-    lastUpdated: row.last_updated,
-  };
-}
-
-/**
- * Get store-specific product data.
- */
-export function getStoreProduct(
-  db: Database.Database,
-  productId: string,
-  storeNumber: string
-): StoreProduct | null {
-  const stmt = db.prepare(
-    `SELECT * FROM store_products WHERE product_id = ? AND store_number = ?`
-  );
-  const row = stmt.get(productId, storeNumber) as StoreProductRow | undefined;
-
-  if (!row) {
-    return null;
-  }
-
-  return rowToStoreProduct(row);
-}
-
-/**
- * Get all store listings for a product.
- */
-export function getStoreProductsByProduct(
-  db: Database.Database,
-  productId: string
-): StoreProduct[] {
-  const stmt = db.prepare(
-    `SELECT * FROM store_products WHERE product_id = ? ORDER BY store_number`
-  );
-  const rows = stmt.all(productId) as StoreProductRow[];
-
-  return rows.map(rowToStoreProduct);
 }
 
 // ============================================================================

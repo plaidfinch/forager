@@ -1,17 +1,16 @@
 /**
  * Tests for product CRUD operations.
+ *
+ * Uses per-store database schema (initializeStoreDataSchema) where products table
+ * contains all fields (merged product + store-specific data).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { initializeSchema } from "../../src/db/schema.js";
-import { upsertStore } from "../../src/db/stores.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
 import {
   upsertProduct,
   getProduct,
-  upsertStoreProduct,
-  getStoreProduct,
-  getStoreProductsByProduct,
   upsertServing,
   getServing,
   upsertNutritionFacts,
@@ -20,30 +19,14 @@ import {
 } from "../../src/db/products.js";
 import type {
   Product,
-  StoreProduct,
   Serving,
   NutritionFact,
-  Store,
 } from "../../src/types/product.js";
 
 describe("Product CRUD Operations", () => {
   let db: Database.Database;
 
-  const testStore: Store = {
-    storeNumber: "74",
-    name: "Geneva",
-    city: "Geneva",
-    state: "NY",
-    zipCode: "14456",
-    streetAddress: "300 Hamilton Street",
-    latitude: 42.8647,
-    longitude: -76.9977,
-    hasPickup: true,
-    hasDelivery: true,
-    hasECommerce: true,
-    lastUpdated: null,
-  };
-
+  // Full product with all fields (base + store-specific)
   const testProduct: Product = {
     productId: "94427",
     name: "Wegmans Vitamin D Whole Milk",
@@ -56,11 +39,10 @@ describe("Product CRUD Operations", () => {
     isSoldByWeight: false,
     isAlcohol: false,
     upc: "077890123456",
-  };
-
-  const testStoreProduct: StoreProduct = {
-    productId: "94427",
-    storeNumber: "74",
+    categoryPath: "Dairy > Milk > Whole Milk",
+    tagsFilter: '["Wegmans Brand"]',
+    tagsPopular: '["Milk"]',
+    // Store-specific fields
     priceInStore: 2.99,
     priceInStoreLoyalty: 2.79,
     priceDelivery: 3.49,
@@ -110,9 +92,8 @@ describe("Product CRUD Operations", () => {
 
   beforeEach(() => {
     db = new Database(":memory:");
-    initializeSchema(db);
-    // Insert test store for foreign key constraints
-    upsertStore(db, testStore);
+    // Use per-store schema (no stores table, products has all fields)
+    initializeStoreDataSchema(db);
   });
 
   afterEach(() => {
@@ -120,7 +101,7 @@ describe("Product CRUD Operations", () => {
   });
 
   describe("upsertProduct", () => {
-    it("inserts a new product", () => {
+    it("inserts a new product with all fields", () => {
       upsertProduct(db, testProduct);
 
       const result = db
@@ -131,11 +112,19 @@ describe("Product CRUD Operations", () => {
       expect(result["product_id"]).toBe("94427");
       expect(result["name"]).toBe("Wegmans Vitamin D Whole Milk");
       expect(result["brand"]).toBe("Wegmans");
+      // Store-specific fields
+      expect(result["price_in_store"]).toBe(2.99);
+      expect(result["price_in_store_loyalty"]).toBe(2.79);
+      expect(result["aisle"]).toBe("Dairy");
+      expect(result["shelf"]).toBe("1");
+      expect(result["is_available"]).toBe(1);
+      expect(result["is_sold_at_store"]).toBe(1);
+      expect(result["last_updated"]).toBe("2024-01-15T10:00:00Z");
     });
 
     it("updates existing product on conflict", () => {
       upsertProduct(db, testProduct);
-      upsertProduct(db, { ...testProduct, name: "Updated Milk" });
+      upsertProduct(db, { ...testProduct, name: "Updated Milk", priceInStore: 3.99 });
 
       const count = db
         .prepare(`SELECT COUNT(*) as c FROM products`)
@@ -145,6 +134,7 @@ describe("Product CRUD Operations", () => {
 
       expect(count.c).toBe(1);
       expect(result?.name).toBe("Updated Milk");
+      expect(result?.priceInStore).toBe(3.99);
     });
 
     it("handles null fields correctly", () => {
@@ -160,6 +150,20 @@ describe("Product CRUD Operations", () => {
         isSoldByWeight: false,
         isAlcohol: false,
         upc: null,
+        categoryPath: null,
+        tagsFilter: null,
+        tagsPopular: null,
+        // Store-specific fields as null
+        priceInStore: null,
+        priceInStoreLoyalty: null,
+        priceDelivery: null,
+        priceDeliveryLoyalty: null,
+        unitPrice: null,
+        aisle: null,
+        shelf: null,
+        isAvailable: null,
+        isSoldAtStore: null,
+        lastUpdated: null,
       };
 
       upsertProduct(db, minimalProduct);
@@ -169,11 +173,14 @@ describe("Product CRUD Operations", () => {
       expect(result).toBeDefined();
       expect(result?.brand).toBeNull();
       expect(result?.description).toBeNull();
+      expect(result?.priceInStore).toBeNull();
+      expect(result?.aisle).toBeNull();
+      expect(result?.isAvailable).toBeNull();
     });
   });
 
   describe("getProduct", () => {
-    it("returns product by ID", () => {
+    it("returns product by ID with all fields", () => {
       upsertProduct(db, testProduct);
 
       const result = getProduct(db, "94427");
@@ -181,6 +188,14 @@ describe("Product CRUD Operations", () => {
       expect(result).toBeDefined();
       expect(result?.productId).toBe("94427");
       expect(result?.name).toBe("Wegmans Vitamin D Whole Milk");
+      expect(result?.brand).toBe("Wegmans");
+      // Store-specific fields
+      expect(result?.priceInStore).toBe(2.99);
+      expect(result?.priceInStoreLoyalty).toBe(2.79);
+      expect(result?.aisle).toBe("Dairy");
+      expect(result?.isAvailable).toBe(true);
+      expect(result?.isSoldAtStore).toBe(true);
+      expect(result?.lastUpdated).toBe("2024-01-15T10:00:00Z");
     });
 
     it("returns null for non-existent product", () => {
@@ -196,81 +211,24 @@ describe("Product CRUD Operations", () => {
 
       expect(result?.isSoldByWeight).toBe(false);
       expect(result?.isAlcohol).toBe(false);
-    });
-  });
-
-  describe("upsertStoreProduct", () => {
-    it("inserts store-specific product data", () => {
-      upsertProduct(db, testProduct);
-      upsertStoreProduct(db, testStoreProduct);
-
-      const result = db
-        .prepare(
-          `SELECT * FROM store_products WHERE product_id = ? AND store_number = ?`
-        )
-        .get("94427", "74") as Record<string, unknown>;
-
-      expect(result).toBeDefined();
-      expect(result["price_in_store"]).toBe(2.99);
-      expect(result["aisle"]).toBe("Dairy");
+      expect(result?.isAvailable).toBe(true);
+      expect(result?.isSoldAtStore).toBe(true);
     });
 
-    it("updates existing store product on conflict", () => {
-      upsertProduct(db, testProduct);
-      upsertStoreProduct(db, testStoreProduct);
-      upsertStoreProduct(db, { ...testStoreProduct, priceInStore: 3.99 });
+    it("handles nullable boolean fields", () => {
+      const productWithNullBooleans: Product = {
+        ...testProduct,
+        productId: "88888",
+        isAvailable: null,
+        isSoldAtStore: null,
+      };
 
-      const result = getStoreProduct(db, "94427", "74");
+      upsertProduct(db, productWithNullBooleans);
 
-      expect(result?.priceInStore).toBe(3.99);
-    });
-  });
+      const result = getProduct(db, "88888");
 
-  describe("getStoreProduct", () => {
-    it("returns store-specific product data", () => {
-      upsertProduct(db, testProduct);
-      upsertStoreProduct(db, testStoreProduct);
-
-      const result = getStoreProduct(db, "94427", "74");
-
-      expect(result).toBeDefined();
-      expect(result?.productId).toBe("94427");
-      expect(result?.storeNumber).toBe("74");
-      expect(result?.priceInStore).toBe(2.99);
-      expect(result?.aisle).toBe("Dairy");
-    });
-
-    it("returns null for non-existent store product", () => {
-      const result = getStoreProduct(db, "94427", "74");
-
-      expect(result).toBeNull();
-    });
-  });
-
-  describe("getStoreProductsByProduct", () => {
-    it("returns all store listings for a product", () => {
-      upsertProduct(db, testProduct);
-      upsertStore(db, { ...testStore, storeNumber: "75", name: "Rochester" });
-
-      upsertStoreProduct(db, testStoreProduct);
-      upsertStoreProduct(db, {
-        ...testStoreProduct,
-        storeNumber: "75",
-        priceInStore: 3.19,
-      });
-
-      const result = getStoreProductsByProduct(db, "94427");
-
-      expect(result.length).toBe(2);
-      expect(result.map((sp) => sp.storeNumber).sort()).toEqual(["74", "75"]);
-    });
-
-    it("returns empty array for product with no store listings", () => {
-      upsertProduct(db, testProduct);
-
-      const result = getStoreProductsByProduct(db, "94427");
-
-      expect(result).toEqual([]);
+      expect(result?.isAvailable).toBeNull();
+      expect(result?.isSoldAtStore).toBeNull();
     });
   });
 
@@ -379,7 +337,6 @@ describe("Product CRUD Operations", () => {
   describe("deleteProduct", () => {
     it("deletes product and cascades to related tables", () => {
       upsertProduct(db, testProduct);
-      upsertStoreProduct(db, testStoreProduct);
       upsertServing(db, testServing);
       upsertNutritionFacts(db, testNutritionFacts);
 
@@ -387,7 +344,6 @@ describe("Product CRUD Operations", () => {
 
       expect(deleted).toBe(true);
       expect(getProduct(db, "94427")).toBeNull();
-      expect(getStoreProduct(db, "94427", "74")).toBeNull();
       expect(getServing(db, "94427")).toBeNull();
       expect(getNutritionFacts(db, "94427")).toEqual([]);
     });

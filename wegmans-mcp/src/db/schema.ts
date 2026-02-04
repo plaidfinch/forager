@@ -301,8 +301,8 @@ export function initializeStoreDataSchema(db: Database.Database): void {
       unit_price TEXT,
       aisle TEXT,
       shelf TEXT,
-      is_available INTEGER NOT NULL DEFAULT 0,
-      is_sold_at_store INTEGER NOT NULL DEFAULT 0,
+      is_available INTEGER,
+      is_sold_at_store INTEGER,
       last_updated TEXT
     )
   `);
