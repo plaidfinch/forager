@@ -147,4 +147,76 @@ describe("Algolia → Domain Type Transformation", () => {
     expect(serving).toBeNull();
     expect(facts).toHaveLength(0);
   });
+
+  // ==========================================================================
+  // Category & Tag Extraction
+  // ==========================================================================
+
+  it("extracts leaf category path from hit", () => {
+    const hitWithCategory: AlgoliaProductHit = {
+      objectID: "74-12345",
+      productId: "12345",
+      productName: "Whole Milk",
+      storeNumber: "74",
+      categories: {
+        lvl0: "Dairy",
+        lvl1: "Dairy > Milk",
+        lvl2: "Dairy > Milk > Whole Milk",
+      },
+    };
+
+    const product = transformHitToProduct(hitWithCategory);
+
+    // Should extract deepest level
+    expect(product.categoryPath).toBe("Dairy > Milk > Whole Milk");
+
+    // Schema should validate
+    expect(ProductSchema.safeParse(product).success).toBe(true);
+  });
+
+  it("extracts filter tags as JSON string", () => {
+    const hitWithTags: AlgoliaProductHit = {
+      objectID: "74-12345",
+      productId: "12345",
+      productName: "Organic Milk",
+      storeNumber: "74",
+      filterTags: ["Organic", "Gluten Free"],
+    };
+
+    const product = transformHitToProduct(hitWithTags);
+
+    expect(product.tagsFilter).toBe('["Organic","Gluten Free"]');
+    expect(ProductSchema.safeParse(product).success).toBe(true);
+  });
+
+  it("extracts popular tags as JSON string", () => {
+    const hitWithTags: AlgoliaProductHit = {
+      objectID: "74-12345",
+      productId: "12345",
+      productName: "Wegmans Milk",
+      storeNumber: "74",
+      popularTags: ["Wegmans Brand", "Family Pack"],
+    };
+
+    const product = transformHitToProduct(hitWithTags);
+
+    expect(product.tagsPopular).toBe('["Wegmans Brand","Family Pack"]');
+    expect(ProductSchema.safeParse(product).success).toBe(true);
+  });
+
+  it("handles products without category or tags", () => {
+    const hitNoTaxonomy: AlgoliaProductHit = {
+      objectID: "74-99999",
+      productId: "99999",
+      productName: "Mystery Product",
+      storeNumber: "74",
+    };
+
+    const product = transformHitToProduct(hitNoTaxonomy);
+
+    expect(product.categoryPath).toBeNull();
+    expect(product.tagsFilter).toBeNull();
+    expect(product.tagsPopular).toBeNull();
+    expect(ProductSchema.safeParse(product).success).toBe(true);
+  });
 });

@@ -58,7 +58,10 @@ export function initializeSchema(db: Database.Database): void {
       allergens TEXT,
       is_sold_by_weight INTEGER NOT NULL DEFAULT 0,
       is_alcohol INTEGER NOT NULL DEFAULT 0,
-      upc TEXT
+      upc TEXT,
+      category_path TEXT,
+      tags_filter TEXT,
+      tags_popular TEXT
     )
   `);
 
@@ -109,12 +112,53 @@ export function initializeSchema(db: Database.Database): void {
     )
   `);
 
+  // Categories ontology (for reference/browsing)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS categories (
+      path TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      level INTEGER NOT NULL,
+      product_count INTEGER
+    )
+  `);
+
+  // Tags ontology (for reference/filtering)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tags (
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      product_count INTEGER,
+      PRIMARY KEY (name, type)
+    )
+  `);
+
+  // View for category lookups
+  db.exec(`
+    CREATE VIEW IF NOT EXISTS product_categories AS
+    SELECT product_id, category_path
+    FROM products
+    WHERE category_path IS NOT NULL
+  `);
+
+  // View for tag lookups (unpacks JSON arrays)
+  db.exec(`
+    CREATE VIEW IF NOT EXISTS product_tags AS
+    SELECT product_id, value as tag_name, 'filter' as tag_type
+    FROM products, json_each(tags_filter)
+    WHERE tags_filter IS NOT NULL
+    UNION ALL
+    SELECT product_id, value as tag_name, 'popular' as tag_type
+    FROM products, json_each(tags_popular)
+    WHERE tags_popular IS NOT NULL
+  `);
+
   // Create useful indexes
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_store_products_store ON store_products(store_number);
     CREATE INDEX IF NOT EXISTS idx_store_products_product ON store_products(product_id);
     CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
     CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand);
+    CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_path);
     CREATE INDEX IF NOT EXISTS idx_nutrition_facts_product ON nutrition_facts(product_id);
   `);
 }

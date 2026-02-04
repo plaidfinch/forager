@@ -151,6 +151,16 @@ function getProductId(hit: AlgoliaProductHit): string {
 }
 
 /**
+ * Extract the deepest (leaf) category path from an Algolia hit.
+ * Returns the most specific category level available.
+ */
+function extractLeafCategoryPath(hit: AlgoliaProductHit): string | null {
+  const cats = hit.categories;
+  if (!cats) return null;
+  return cats.lvl4 ?? cats.lvl3 ?? cats.lvl2 ?? cats.lvl1 ?? cats.lvl0 ?? null;
+}
+
+/**
  * Transform an Algolia hit to a Product domain object.
  */
 export function transformHitToProduct(hit: AlgoliaProductHit): Product {
@@ -166,6 +176,9 @@ export function transformHitToProduct(hit: AlgoliaProductHit): Product {
     isSoldByWeight: hit.isSoldByWeight ?? false,
     isAlcohol: hit.isAlcoholItem ?? false,
     upc: hit.upc?.[0] ?? null,
+    categoryPath: extractLeafCategoryPath(hit),
+    tagsFilter: hit.filterTags ? JSON.stringify(hit.filterTags) : null,
+    tagsPopular: hit.popularTags ? JSON.stringify(hit.popularTags) : null,
   };
 }
 

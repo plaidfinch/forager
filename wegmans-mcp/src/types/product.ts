@@ -37,6 +37,10 @@ export const ProductSchema = z.object({
   isSoldByWeight: z.boolean(),
   isAlcohol: z.boolean(),
   upc: z.string().nullable(), // Primary UPC (first from array)
+  // Category & Tags
+  categoryPath: z.string().nullable(), // Full leaf path, e.g., "Dairy > Milk > Whole Milk"
+  tagsFilter: z.string().nullable(), // JSON array, e.g., '["Organic", "Gluten Free"]'
+  tagsPopular: z.string().nullable(), // JSON array, e.g., '["Wegmans Brand"]'
 });
 
 export type Product = z.infer<typeof ProductSchema>;
