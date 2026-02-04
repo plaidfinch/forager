@@ -13,28 +13,15 @@ Add category and tag support to enable:
 ## Philosophy
 
 - **Algolia populates, SQL queries** - Use broad Algolia searches to populate the local SQLite mirror, then use SQL for filtering/joins/aggregations
+- **Stores fetched on startup** - Store list fetched from Wegmans API on server startup (24h cache)
 - **Full catalog on setStore** - Scrape entire catalog when store is selected (if empty or stale)
 - **Dynamic credentials** - API key and app ID are extracted from Wegmans website, not hardcoded
 - **Schema in tool description** - Database schema is embedded in the query tool description so Claude doesn't need a separate tool call
+- **Everything via SQL** - No special tools for listing stores; query the `stores` table directly
 
 ## MCP Tools API
 
-The server exposes 3 tools:
-
-### `listStores`
-List available Wegmans stores with their store numbers.
-
-```typescript
-interface ListStoresParams {
-  showAll?: boolean;  // default: true
-}
-```
-
-Fetches from `https://www.wegmans.com/api/stores` with 24h caching:
-- `showAll=true` (default): Returns all stores, fetching from API if cache is stale
-- `showAll=false`: Returns only cached stores without fetching
-
-Returns ~114 stores with full details (address, coordinates, services).
+The server exposes 2 tools:
 
 ### `setStore`
 Set the active store and fetch its catalog. Call this first.
@@ -73,13 +60,25 @@ CREATE TABLE settings (
   value TEXT NOT NULL
 );
 
--- Wegmans store locations
+-- Wegmans store locations (fetched from API on startup)
 CREATE TABLE stores (
   store_number TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   city TEXT,
   state TEXT,
-  ...
+  zip_code TEXT,
+  street_address TEXT,
+  latitude REAL,              -- for distance calculations
+  longitude REAL,
+  phone_number TEXT,
+  has_pickup INTEGER,
+  has_delivery INTEGER,
+  has_ecommerce INTEGER,
+  has_pharmacy INTEGER,
+  sells_alcohol INTEGER,
+  open_state TEXT,            -- e.g., "Open"
+  opening_date TEXT,
+  zones TEXT                  -- regional zone
 );
 
 -- Product metadata (store-independent)
@@ -227,6 +226,32 @@ const MAX_BACKOFF_MS = 30000; // Max delay on rate limit
 ```
 
 ## Query Examples
+
+### Store queries
+
+**Find stores closest to NYC (40.7128, -74.0060):**
+```sql
+SELECT store_number, name, city, state,
+  SQRT(POW(latitude - 40.7128, 2) + POW(longitude - (-74.0060), 2)) as distance
+FROM stores
+WHERE latitude IS NOT NULL
+ORDER BY distance
+LIMIT 5;
+```
+
+**Stores with pharmacy and delivery in NY:**
+```sql
+SELECT store_number, name, city, phone_number
+FROM stores
+WHERE state = 'NY' AND has_pharmacy = 1 AND has_delivery = 1;
+```
+
+**All stores by state:**
+```sql
+SELECT state, COUNT(*) as count FROM stores GROUP BY state ORDER BY count DESC;
+```
+
+### Product queries
 
 **Products in Dairy (any subcategory):**
 ```sql
