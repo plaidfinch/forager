@@ -354,9 +354,11 @@ export async function setStoreTool(
       error: err instanceof Error ? err.message : String(err),
     };
   } finally {
-    // Close store database if we opened it
-    // Note: In production, the caller may want to keep this open
-    // For now, we close it to avoid leaking connections in tests
+    // Always close the database we opened to avoid leaking connections.
+    // In production, the caller (index.ts) re-opens via openStoreDatabase()
+    // after a successful setStore - this double open is intentional to allow
+    // dependency injection for testing while keeping the global connection
+    // manager as the source of truth for active connections.
     if (storeDb) {
       storeDb.close();
     }
