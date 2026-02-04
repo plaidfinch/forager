@@ -92,15 +92,15 @@ describe("getDataDir", () => {
 
     const dataDir = getDataDir();
 
-    expect(dataDir).toBe("/custom/data/wegmans-mcp");
+    expect(dataDir).toBe("/custom/data/forager");
   });
 
-  it("defaults to ~/.local/share/wegmans-mcp when XDG_DATA_HOME is not set", () => {
+  it("defaults to ~/.local/share/forager when XDG_DATA_HOME is not set", () => {
     delete process.env["XDG_DATA_HOME"];
 
     const dataDir = getDataDir();
 
-    expect(dataDir).toBe(join(homedir(), ".local", "share", "wegmans-mcp"));
+    expect(dataDir).toBe(join(homedir(), ".local", "share", "forager"));
   });
 });
 

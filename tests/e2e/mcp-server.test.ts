@@ -31,7 +31,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
 
   beforeEach(async () => {
     // Create temp directory for test database
-    testDir = join(tmpdir(), `wegmans-mcp-e2e-${randomUUID()}`);
+    testDir = join(tmpdir(), `forager-e2e-${randomUUID()}`);
     mkdirSync(testDir, { recursive: true });
 
     // Create transport to spawn server process
