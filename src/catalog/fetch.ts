@@ -455,14 +455,17 @@ export async function fetchCatalog(
       coverage,
     };
   } catch (err) {
-    return {
+    const result: FetchResult = {
       success: false,
       products: [],
       queryCount: 0,
       totalProducts: 0,
       coverage: 0,
       error: err instanceof Error ? err.message : String(err),
-      status: err instanceof AlgoliaError ? err.status : undefined,
     };
+    if (err instanceof AlgoliaError) {
+      result.status = err.status;
+    }
+    return result;
   }
 }

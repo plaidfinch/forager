@@ -115,14 +115,17 @@ export async function refreshCatalog(
   const fetchResult = await fetchCatalog(apiKey, appId, storeNumber, onProgress);
 
   if (!fetchResult.success) {
-    return {
+    const result: RefreshResult = {
       success: false,
       productsAdded: 0,
       categoriesAdded: 0,
       tagsAdded: 0,
       error: fetchResult.error,
-      status: fetchResult.status,
     };
+    if (fetchResult.status !== undefined) {
+      result.status = fetchResult.status;
+    }
+    return result;
   }
 
   // Get initial ontology stats
