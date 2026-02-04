@@ -44,12 +44,14 @@ export function openDatabase(dbPath: string): DatabaseConnection {
   initializeSchema(db);
 
   // Read-only connection for raw queries
-  // For :memory: databases, we can't open a second readonly connection,
-  // so we use the same connection but the query executor enforces read-only via parsing
+  // For file-based DBs, SQLite enforces readonly at the engine level.
+  // For :memory: DBs, we can't open a separate readonly connection.
+  // Write attempts still fail because better-sqlite3's stmt.all() throws
+  // "This statement does not return data" for non-SELECT statements.
   let readonlyDb: Database.Database;
   if (dbPath === ":memory:") {
-    // In-memory databases can't have a separate readonly connection
-    // We'll still use the same db but rely on the query parser for safety
+    // In-memory databases share the same connection
+    // Write protection is weaker but still effective via stmt.all() behavior
     readonlyDb = db;
   } else {
     // File-based databases can have a true readonly connection
