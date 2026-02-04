@@ -12,8 +12,8 @@ Add category and tag support to enable:
 ## Philosophy
 
 - **Algolia populates, SQL queries** - Use broad Algolia searches to populate the local SQLite mirror, then use SQL for filtering/joins/aggregations
-- **Just-in-time mirroring** - Be a good API citizen; don't aggressively mirror everything
-- **Claude should be aware** local data may be partial and proactively search when needed
+- **Full catalog on startup** - Scrape entire catalog if DB is empty or stale (> 1 day)
+- **Claude should be aware** local data reflects a point-in-time snapshot; prices/availability may have changed
 
 ## Database Schema Changes
 
@@ -65,31 +65,62 @@ FROM products, json_each(tags_popular)
 WHERE tags_popular IS NOT NULL;
 ```
 
+## Full Catalog Scrape
+
+**When:** Server startup, if:
+- Products table is empty, OR
+- Last scrape was > 1 day ago (check `last_updated` in metadata or products)
+
+**Algorithm:**
+1. Start with all products for the store
+2. If > 1000 results, dynamically split by best available facet (prefers category hierarchy)
+3. For each split, also query the "remainder" (products not matching any facet value)
+4. Recursively split until all buckets <= 1000
+5. Execute all leaf queries with concurrency, deduplicate by productId
+6. Back off exponentially if rate-limited (429 response)
+
+**Performance:**
+- ~156 queries for full catalog
+- ~29,000 products (98.1% coverage)
+- ~15-20 seconds with concurrency (vs 45s sequential)
+- Remaining 2% are nameless POS placeholder items (not useful for users)
+
+**Concurrency & Rate Limiting:**
+```typescript
+const CONCURRENCY = 5;          // Parallel requests
+const BASE_DELAY = 50;          // ms between batches
+const MAX_BACKOFF = 30000;      // Max delay on rate limit
+
+async function fetchWithBackoff(queries: Query[]): Promise<Result[]> {
+  let delay = BASE_DELAY;
+
+  for (const batch of chunk(queries, CONCURRENCY)) {
+    const results = await Promise.all(batch.map(q => fetchQuery(q)));
+
+    if (results.some(r => r.status === 429)) {
+      delay = Math.min(delay * 2, MAX_BACKOFF);
+      console.log(`Rate limited, backing off ${delay}ms`);
+      await sleep(delay);
+      // Retry failed queries...
+    } else {
+      delay = BASE_DELAY;  // Reset on success
+    }
+
+    await sleep(delay);
+  }
+}
+```
+
 ## Ontology Population
 
-**When:** Server startup, if `categories` table is empty.
+Ontology (categories and tags reference tables) is populated as part of the full catalog scrape.
 
-**How:** Single empty-string search with `facets: ["*"]` returns complete ontology:
+The initial facet query returns:
 - ~1,141 category paths across 4 levels
 - ~22 filter tags, ~8 popular tags
 - Product counts for each
 
-**Implementation:**
-```typescript
-async function populateOntology(db: Database, apiKey: string, storeNumber: string) {
-  const count = db.prepare("SELECT COUNT(*) as n FROM categories").get();
-  if (count.n > 0) return;  // Already populated
-
-  const result = await searchProducts(apiKey, {
-    query: "",
-    storeNumber,
-    hitsPerPage: 1,  // Only need facets
-  });
-
-  // Extract and insert categories from categories.lvl0, lvl1, lvl2, lvl3
-  // Extract and insert tags from filterTags, popularTags
-}
-```
+These are inserted into the `categories` and `tags` tables for Claude to reference.
 
 ## Search Tool Changes
 

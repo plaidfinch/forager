@@ -20,6 +20,12 @@ const ALGOLIA_URL = `https://${ALGOLIA_APP_ID.toLowerCase()}-dsn.algolia.net/1/i
 const MAX_HITS_PER_QUERY = 1000;
 const DEFAULT_STORE = "74";
 
+// Concurrency settings
+const CONCURRENCY = 5;           // Parallel requests during fetch phase
+const BASE_DELAY_MS = 50;        // Base delay between batches
+const MAX_BACKOFF_MS = 30000;    // Max delay on rate limit
+const PLANNING_DELAY_MS = 30;    // Delay during planning phase (sequential)
+
 interface AlgoliaHit {
   objectID: string;
   productId?: string;
@@ -37,46 +43,96 @@ interface AlgoliaResponse {
   results: AlgoliaResult[];
 }
 
+/** Split array into chunks of size n */
+function chunk<T>(arr: T[], n: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) {
+    chunks.push(arr.slice(i, i + n));
+  }
+  return chunks;
+}
+
+/** Sleep for ms milliseconds */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+interface QueryOptions {
+  query?: string;
+  filters?: string;
+  hitsPerPage?: number;
+  facets?: string[];
+}
+
+interface QueryResult {
+  success: boolean;
+  status: number;
+  result?: AlgoliaResult;
+  error?: string;
+}
+
 async function algoliaQuery(
   storeNumber: string,
-  options: {
-    query?: string;
-    filters?: string;
-    hitsPerPage?: number;
-    facets?: string[];
-  }
+  options: QueryOptions
 ): Promise<AlgoliaResult> {
+  const result = await algoliaQueryWithStatus(storeNumber, options);
+  if (!result.success || !result.result) {
+    throw new Error(result.error ?? `Algolia error: ${result.status}`);
+  }
+  return result.result;
+}
+
+async function algoliaQueryWithStatus(
+  storeNumber: string,
+  options: QueryOptions
+): Promise<QueryResult> {
   const baseFilters = `storeNumber:${storeNumber} AND isSoldAtStore:true`;
   const filters = options.filters
     ? `${baseFilters} AND ${options.filters}`
     : baseFilters;
 
-  const response = await fetch(ALGOLIA_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Algolia-API-Key": ALGOLIA_API_KEY,
-      "X-Algolia-Application-Id": ALGOLIA_APP_ID,
-    },
-    body: JSON.stringify({
-      requests: [
-        {
-          indexName: "products",
-          query: options.query ?? "",
-          filters,
-          hitsPerPage: options.hitsPerPage ?? 20,
-          facets: options.facets ?? [],
-        },
-      ],
-    }),
-  });
+  try {
+    const response = await fetch(ALGOLIA_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Algolia-API-Key": ALGOLIA_API_KEY,
+        "X-Algolia-Application-Id": ALGOLIA_APP_ID,
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            indexName: "products",
+            query: options.query ?? "",
+            filters,
+            hitsPerPage: options.hitsPerPage ?? 20,
+            facets: options.facets ?? [],
+          },
+        ],
+      }),
+    });
 
-  if (!response.ok) {
-    throw new Error(`Algolia error: ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      return {
+        success: false,
+        status: response.status,
+        error: `Algolia error: ${response.status} ${response.statusText}`,
+      };
+    }
+
+    const data = (await response.json()) as AlgoliaResponse;
+    return {
+      success: true,
+      status: 200,
+      result: data.results[0],
+    };
+  } catch (err) {
+    return {
+      success: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
-
-  const data = (await response.json()) as AlgoliaResponse;
-  return data.results[0];
 }
 
 interface SplitTask {
@@ -269,42 +325,95 @@ async function main() {
   }
 
   console.log(`\nQuery plan complete: ${ready.length} queries`);
-  console.log(`\nFetching products...`);
+  console.log(`\nFetching products (concurrency: ${CONCURRENCY})...`);
 
-  // Execute all ready queries
+  // Execute all ready queries with concurrency and rate limit handling
   const products = new Map<string, AlgoliaHit>();
   let completed = 0;
+  let currentDelay = BASE_DELAY_MS;
 
-  for (const task of ready) {
-    const result = await algoliaQuery(storeNumber, {
-      filters: task.filter ?? undefined,
-      hitsPerPage: MAX_HITS_PER_QUERY,
-    });
+  const batches = chunk(ready, CONCURRENCY);
 
-    let newCount = 0;
-    for (const hit of result.hits) {
-      const id = hit.productId ?? hit.productID ?? hit.objectID;
-      if (!products.has(id)) {
-        products.set(id, hit);
-        newCount++;
+  for (const batch of batches) {
+    // Execute batch concurrently
+    const results = await Promise.all(
+      batch.map(async (task) => {
+        const result = await algoliaQueryWithStatus(storeNumber, {
+          filters: task.filter ?? undefined,
+          hitsPerPage: MAX_HITS_PER_QUERY,
+        });
+        return { task, result };
+      })
+    );
+
+    // Check for rate limiting
+    const rateLimited = results.filter((r) => r.result.status === 429);
+    if (rateLimited.length > 0) {
+      currentDelay = Math.min(currentDelay * 2, MAX_BACKOFF_MS);
+      console.log(
+        `  ⚠️  Rate limited on ${rateLimited.length} requests, backing off ${currentDelay}ms...`
+      );
+      await sleep(currentDelay);
+
+      // Retry rate-limited queries sequentially
+      for (const { task } of rateLimited) {
+        const retryResult = await algoliaQueryWithStatus(storeNumber, {
+          filters: task.filter ?? undefined,
+          hitsPerPage: MAX_HITS_PER_QUERY,
+        });
+
+        if (retryResult.success && retryResult.result) {
+          for (const hit of retryResult.result.hits) {
+            const id = hit.productId ?? hit.productID ?? hit.objectID;
+            if (!products.has(id)) {
+              products.set(id, hit);
+            }
+          }
+        }
+
+        completed++;
+        await sleep(currentDelay);
+      }
+    } else {
+      // Reset delay on successful batch
+      currentDelay = BASE_DELAY_MS;
+    }
+
+    // Process successful results
+    for (const { task, result } of results) {
+      if (result.status === 429) continue; // Already handled above
+
+      if (result.success && result.result) {
+        let newCount = 0;
+        for (const hit of result.result.hits) {
+          const id = hit.productId ?? hit.productID ?? hit.objectID;
+          if (!products.has(id)) {
+            products.set(id, hit);
+            newCount++;
+          }
+        }
+
+        completed++;
+        const pct = ((completed / ready.length) * 100).toFixed(1);
+
+        const shortName =
+          task.name.length > 50 ? "..." + task.name.slice(-47) : task.name;
+        const cappedNote =
+          result.result.nbHits > MAX_HITS_PER_QUERY
+            ? ` (capped, ${result.result.nbHits} total)`
+            : "";
+
+        console.log(
+          `  [${completed}/${ready.length}] ${pct}% - ${shortName}: ${result.result.hits.length}${cappedNote} (${products.size} total)`
+        );
+      } else {
+        // Log error but continue
+        console.error(`  ❌ Failed: ${task.name} - ${result.error}`);
+        completed++;
       }
     }
 
-    completed++;
-    const pct = ((completed / ready.length) * 100).toFixed(1);
-
-    const shortName =
-      task.name.length > 50 ? "..." + task.name.slice(-47) : task.name;
-    const cappedNote =
-      result.nbHits > MAX_HITS_PER_QUERY
-        ? ` (capped, ${result.nbHits} total)`
-        : "";
-
-    console.log(
-      `  [${completed}/${ready.length}] ${pct}% - ${shortName}: ${result.hits.length}${cappedNote} (${products.size} total)`
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await sleep(currentDelay);
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
