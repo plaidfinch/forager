@@ -203,8 +203,8 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.stores.length).toBeGreaterThan(50); // ~75 known stores
     });
 
-    it("returns known stores with showAll=false when no stores in DB (fallback)", async () => {
-      // When DB is empty, showAll=false still returns known stores as fallback
+    it("returns empty list with showAll=false when no stores cached", async () => {
+      // When cache is empty, showAll=false returns empty (no fallback to API)
       const result = await client.callTool({
         name: "listStores",
         arguments: { showAll: false },
@@ -213,7 +213,8 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
       expect(response.success).toBe(true);
-      expect(response.stores.length).toBeGreaterThan(50); // ~75 known stores
+      expect(response.stores).toEqual([]);
+      expect(response.fromCache).toBe(true);
     });
   });
 

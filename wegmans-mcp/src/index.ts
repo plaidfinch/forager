@@ -223,7 +223,7 @@ export function createServer(): Server {
 
         case "listStores": {
           const { showAll } = args as { showAll?: boolean };
-          const result = listStoresTool(db, showAll ?? true);
+          const result = await listStoresTool(db, showAll ?? true);
           return {
             content: [{ type: "text", text: JSON.stringify(result) }],
           };
