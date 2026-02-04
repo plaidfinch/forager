@@ -10,6 +10,9 @@ snapshots/exploration-*.json
 snapshots/stores-exploration.json
 snapshots/*.png
 
+# Full catalog dumps (large files, can be regenerated)
+snapshots/catalog-*.json
+
 # Keep snapshots/responses/ - these are safe to commit
 # !snapshots/responses/
 
