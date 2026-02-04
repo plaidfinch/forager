@@ -1,0 +1,3 @@
+[submodule "wegmans-shopping-ref"]
+	path = wegmans-shopping-ref
+	url = https://github.com/nathannorman-toast/wegmans-shopping.git
