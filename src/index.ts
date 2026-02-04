@@ -127,6 +127,9 @@ ${productsSchemaText}`,
         },
         required: ["sql"],
       },
+      annotations: {
+        readOnlyHint: true,
+      },
     },
     {
       name: "setStore",
@@ -147,6 +150,9 @@ ${productsSchemaText}`,
           },
         },
         required: ["storeNumber"],
+      },
+      annotations: {
+        idempotentHint: true,
       },
     },
   ];
