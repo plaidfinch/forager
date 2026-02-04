@@ -65,15 +65,14 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
   });
 
   describe("tools/list", () => {
-    it("returns all 3 tools", async () => {
+    it("returns all 2 tools", async () => {
       const result = await client.listTools();
 
-      expect(result.tools).toHaveLength(3);
+      expect(result.tools).toHaveLength(2);
 
       const toolNames = result.tools.map((t) => t.name);
       expect(toolNames).toContain("query");
       expect(toolNames).toContain("setStore");
-      expect(toolNames).toContain("listStores");
     });
 
     it("query tool has correct schema with embedded database schema", async () => {
@@ -106,21 +105,6 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
           forceRefresh: { type: "boolean", description: expect.any(String) },
         },
         required: ["storeNumber"],
-      });
-    });
-
-    it("listStores tool has correct schema", async () => {
-      const result = await client.listTools();
-
-      const listStoresTool = result.tools.find((t) => t.name === "listStores");
-      expect(listStoresTool).toBeDefined();
-      expect(listStoresTool?.description).toContain("List available Wegmans stores");
-      expect(listStoresTool?.inputSchema).toEqual({
-        type: "object",
-        properties: {
-          showAll: { type: "boolean", description: expect.any(String) },
-        },
-        required: [],
       });
     });
   });
@@ -170,12 +154,12 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.error).toBeDefined();
     });
 
-    it("queries database tables", async () => {
-      // Query the stores table which should be empty
+    it("queries stores table (populated on startup)", async () => {
+      // Stores are fetched and cached on server startup
       const result = await client.callTool({
         name: "query",
         arguments: {
-          sql: "SELECT name, city, state FROM stores ORDER BY store_number",
+          sql: "SELECT name, city, state FROM stores ORDER BY CAST(store_number AS INTEGER) LIMIT 3",
         },
       });
 
@@ -183,38 +167,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
 
       expect(response.success).toBe(true);
       expect(response.columns).toEqual(["name", "city", "state"]);
-      expect(response.rows).toEqual([]);
-      expect(response.rowCount).toBe(0);
-    });
-  });
-
-  describe("listStores tool", () => {
-    it("returns known Wegmans stores with showAll=true", async () => {
-      const result = await client.callTool({
-        name: "listStores",
-        arguments: { showAll: true },
-      });
-
-      const response = JSON.parse((result.content[0] as { text: string }).text);
-
-      expect(response.success).toBe(true);
-      expect(response.stores).toBeDefined();
-      expect(Array.isArray(response.stores)).toBe(true);
-      expect(response.stores.length).toBeGreaterThan(50); // ~75 known stores
-    });
-
-    it("returns empty list with showAll=false when no stores cached", async () => {
-      // When cache is empty, showAll=false returns empty (no fallback to API)
-      const result = await client.callTool({
-        name: "listStores",
-        arguments: { showAll: false },
-      });
-
-      const response = JSON.parse((result.content[0] as { text: string }).text);
-
-      expect(response.success).toBe(true);
-      expect(response.stores).toEqual([]);
-      expect(response.fromCache).toBe(true);
+      expect(response.rowCount).toBeGreaterThan(0);
     });
   });
 

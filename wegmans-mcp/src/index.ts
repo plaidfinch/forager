@@ -1,10 +1,12 @@
 /**
  * MCP Server Entry Point for Wegmans Product Data.
  *
- * Provides 3 tools for interacting with Wegmans product data:
- * - listStores: List available Wegmans stores
+ * Provides 2 tools for interacting with Wegmans product data:
  * - setStore: Select a store and fetch its catalog
  * - query: Execute read-only SQL queries (schema is embedded in tool description)
+ *
+ * Store list is fetched on startup and cached in the database.
+ * Use SQL to query the stores table for location-based searches.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -27,8 +29,8 @@ import {
 import { queryTool } from "./tools/query.js";
 import { schemaTool, type SchemaToolResultExtended } from "./tools/schema.js";
 import { setStoreTool, getActiveStore } from "./tools/setStore.js";
-import { listStoresTool } from "./tools/listStores.js";
 import { getCatalogStatus, type FetchProgress } from "./catalog/index.js";
+import { getStores } from "./stores/fetch.js";
 
 /**
  * Format schema result as a string for embedding in tool description.
@@ -94,14 +96,14 @@ ${schemaText}`,
     {
       name: "setStore",
       description:
-        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store.",
+        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store. Query the stores table to find store numbers and locations.",
       inputSchema: {
         type: "object" as const,
         properties: {
           storeNumber: {
             type: "string",
             description:
-              "Wegmans store number (e.g., '74' for Geneva, NY). Use listStores to find store numbers.",
+              "Wegmans store number (e.g., '74' for Geneva, NY). Query the stores table to find store numbers.",
           },
           forceRefresh: {
             type: "boolean",
@@ -110,22 +112,6 @@ ${schemaText}`,
           },
         },
         required: ["storeNumber"],
-      },
-    },
-    {
-      name: "listStores",
-      description:
-        "List available Wegmans stores with their store numbers. Use this to find the store number for setStore.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          showAll: {
-            type: "boolean",
-            description:
-              "If true, show all known stores. If false, only show stores in local database (default: true)",
-          },
-        },
-        required: [] as string[],
       },
     },
   ];
@@ -221,14 +207,6 @@ export function createServer(): Server {
           };
         }
 
-        case "listStores": {
-          const { showAll } = args as { showAll?: boolean };
-          const result = await listStoresTool(db, showAll ?? true);
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-          };
-        }
-
         default:
           return {
             content: [
@@ -314,6 +292,24 @@ function reportCatalogStatus(db: Database.Database): void {
 }
 
 /**
+ * Refresh stores cache on startup if stale.
+ */
+async function refreshStoresIfNeeded(db: Database.Database): Promise<void> {
+  try {
+    const { stores, fromCache, error } = await getStores(db);
+    if (error) {
+      log(`Stores: ${stores.length} (${error})`);
+    } else if (fromCache) {
+      log(`Stores: ${stores.length} (cached)`);
+    } else {
+      log(`Stores: ${stores.length} (fetched from Wegmans)`);
+    }
+  } catch (err) {
+    log(`Failed to load stores: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Main entry point - starts the MCP server.
  */
 async function main(): Promise<void> {
@@ -325,6 +321,9 @@ async function main(): Promise<void> {
   // Open database connection
   openDatabase(dbPath);
   const { db } = getDatabase();
+
+  // Refresh stores cache if needed
+  await refreshStoresIfNeeded(db);
 
   // Report catalog status
   reportCatalogStatus(db);

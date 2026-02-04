@@ -28,8 +28,8 @@ describe("MCP Server", () => {
   });
 
   describe("TOOL_DEFINITIONS", () => {
-    it("defines 3 tools", () => {
-      expect(TOOL_DEFINITIONS).toHaveLength(3);
+    it("defines 2 tools", () => {
+      expect(TOOL_DEFINITIONS).toHaveLength(2);
     });
 
     it("defines query tool with sql input and schema in description", () => {
@@ -51,12 +51,6 @@ describe("MCP Server", () => {
       const setStoreTool = TOOL_DEFINITIONS.find((t) => t.name === "setStore");
       expect(setStoreTool).toBeDefined();
       expect(setStoreTool?.description).toContain("Set the active Wegmans store");
-    });
-
-    it("defines listStores tool", () => {
-      const listStoresTool = TOOL_DEFINITIONS.find((t) => t.name === "listStores");
-      expect(listStoresTool).toBeDefined();
-      expect(listStoresTool?.description).toContain("List available Wegmans stores");
     });
 
   });
