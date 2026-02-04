@@ -234,17 +234,25 @@ export function saveStoresToCache(db: Database.Database, stores: StoreInfo[]): v
 /**
  * Get stores, fetching from API if cache is stale or empty.
  * Returns cached data on fetch failure if available.
+ *
+ * @param db - Stores database connection
+ * @param options - Optional settings
+ * @param options.forceRefresh - Force fetch from API even if cache is fresh
  */
-export async function getStores(db: Database.Database): Promise<{
+export async function getStores(
+  db: Database.Database,
+  options: { forceRefresh?: boolean } = {}
+): Promise<{
   stores: StoreInfo[];
   fromCache: boolean;
   error?: string;
 }> {
+  const { forceRefresh = false } = options;
   const cached = getStoresFromCache(db);
   const isStale = isStoresCacheStale(db);
 
-  // If we have fresh cache, return it
-  if (cached.length > 0 && !isStale) {
+  // If we have fresh cache and not forcing refresh, return it
+  if (cached.length > 0 && !isStale && !forceRefresh) {
     return { stores: cached, fromCache: true };
   }
 
