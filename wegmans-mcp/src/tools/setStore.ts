@@ -78,14 +78,19 @@ function getStoreProductCount(db: Database.Database, storeNumber: string): numbe
   return row.count;
 }
 
+interface ApiCredentials {
+  apiKey: string;
+  appId: string;
+}
+
 /**
- * Get the most recent API key from the database.
+ * Get the most recent API credentials from the database.
  */
-function getApiKey(db: Database.Database): string | null {
+function getApiCredentials(db: Database.Database): ApiCredentials | null {
   const row = db
-    .prepare("SELECT key FROM api_keys ORDER BY id DESC LIMIT 1")
-    .get() as { key: string } | undefined;
-  return row?.key ?? null;
+    .prepare("SELECT key, app_id FROM api_keys ORDER BY id DESC LIMIT 1")
+    .get() as { key: string; app_id: string } | undefined;
+  return row ? { apiKey: row.key, appId: row.app_id } : null;
 }
 
 /**
@@ -98,43 +103,43 @@ function storeApiKey(db: Database.Database, apiKey: string, appId: string): void
 }
 
 /**
- * Get or extract an API key. Extracts a new one if none exists.
+ * Get or extract API credentials. Extracts new ones if none exist.
  */
-async function ensureApiKey(
+async function ensureApiCredentials(
   db: Database.Database,
   onProgress?: (progress: FetchProgress) => void
-): Promise<string | null> {
-  // Try existing key first
-  const existingKey = getApiKey(db);
-  if (existingKey) {
-    return existingKey;
+): Promise<ApiCredentials | null> {
+  // Try existing credentials first
+  const existing = getApiCredentials(db);
+  if (existing) {
+    return existing;
   }
 
-  // Extract new key
+  // Extract new credentials
   onProgress?.({
     phase: "planning",
     current: 0,
     total: 0,
-    message: "Extracting API key from Wegmans website...",
+    message: "Extracting API credentials from Wegmans website...",
   });
 
   const result = await extractAlgoliaKey({ headless: true, timeout: 60000 });
 
-  if (!result.success || !result.apiKey) {
+  if (!result.success || !result.apiKey || !result.appId) {
     return null;
   }
 
-  // Store the key
-  storeApiKey(db, result.apiKey, result.appId ?? "");
+  // Store the credentials
+  storeApiKey(db, result.apiKey, result.appId);
 
   onProgress?.({
     phase: "planning",
     current: 0,
     total: 0,
-    message: "API key extracted successfully",
+    message: "API credentials extracted successfully",
   });
 
-  return result.apiKey;
+  return { apiKey: result.apiKey, appId: result.appId };
 }
 
 /**
@@ -164,19 +169,25 @@ export async function setStoreTool(
     const needsRefresh = forceRefresh || storeProductCount === 0 || status.isStale;
 
     if (needsRefresh) {
-      // Get or extract API key
-      const apiKey = await ensureApiKey(db, onProgress);
-      if (!apiKey) {
+      // Get or extract API credentials
+      const credentials = await ensureApiCredentials(db, onProgress);
+      if (!credentials) {
         return {
           success: false,
           storeNumber,
           refreshed: false,
           productCount: storeProductCount,
-          error: "Failed to extract API key from Wegmans website",
+          error: "Failed to extract API credentials from Wegmans website",
         };
       }
 
-      const result = await refreshCatalog(db, apiKey, storeNumber, onProgress);
+      const result = await refreshCatalog(
+        db,
+        credentials.apiKey,
+        credentials.appId,
+        storeNumber,
+        onProgress
+      );
 
       if (!result.success) {
         return {

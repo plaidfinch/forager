@@ -89,6 +89,7 @@ export function getCatalogStatus(db: Database.Database): CatalogStatus {
  *
  * @param db - Database connection
  * @param apiKey - Algolia API key
+ * @param appId - Algolia application ID
  * @param storeNumber - Store number to fetch
  * @param onProgress - Optional progress callback
  * @returns Refresh result with counts
@@ -96,11 +97,12 @@ export function getCatalogStatus(db: Database.Database): CatalogStatus {
 export async function refreshCatalog(
   db: Database.Database,
   apiKey: string,
+  appId: string,
   storeNumber: string,
   onProgress?: (progress: FetchProgress) => void
 ): Promise<RefreshResult> {
   // Fetch products
-  const fetchResult = await fetchCatalog(apiKey, storeNumber, onProgress);
+  const fetchResult = await fetchCatalog(apiKey, appId, storeNumber, onProgress);
 
   if (!fetchResult.success) {
     return {
@@ -166,6 +168,7 @@ export async function refreshCatalog(
  *
  * @param db - Database connection
  * @param apiKey - Algolia API key
+ * @param appId - Algolia application ID
  * @param storeNumber - Store number to fetch
  * @param onProgress - Optional progress callback
  * @returns Refresh result if refreshed, null if no refresh needed
@@ -173,6 +176,7 @@ export async function refreshCatalog(
 export async function refreshCatalogIfNeeded(
   db: Database.Database,
   apiKey: string,
+  appId: string,
   storeNumber: string,
   onProgress?: (progress: FetchProgress) => void
 ): Promise<RefreshResult | null> {
@@ -182,5 +186,5 @@ export async function refreshCatalogIfNeeded(
     return null; // No refresh needed
   }
 
-  return refreshCatalog(db, apiKey, storeNumber, onProgress);
+  return refreshCatalog(db, apiKey, appId, storeNumber, onProgress);
 }

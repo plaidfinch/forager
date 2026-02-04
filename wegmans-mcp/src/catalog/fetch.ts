@@ -5,10 +5,14 @@
  * to work around the 1000 result limit.
  */
 
-import { ALGOLIA_APP_ID } from "../algolia/client.js";
-
-const ALGOLIA_URL = `https://${ALGOLIA_APP_ID.toLowerCase()}-dsn.algolia.net/1/indexes/*/queries`;
 const MAX_HITS_PER_QUERY = 1000;
+
+/**
+ * Build the Algolia API URL for a given app ID.
+ */
+function getAlgoliaUrl(appId: string): string {
+  return `https://${appId.toLowerCase()}-dsn.algolia.net/1/indexes/*/queries`;
+}
 
 // Concurrency settings (benchmarked optimal: 30)
 const CONCURRENCY = 30;
@@ -84,6 +88,7 @@ function sleep(ms: number): Promise<void> {
 
 async function algoliaQueryWithStatus(
   apiKey: string,
+  appId: string,
   storeNumber: string,
   options: QueryOptions
 ): Promise<QueryResult> {
@@ -93,12 +98,12 @@ async function algoliaQueryWithStatus(
     : baseFilters;
 
   try {
-    const response = await fetch(ALGOLIA_URL, {
+    const response = await fetch(getAlgoliaUrl(appId), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Algolia-API-Key": apiKey,
-        "X-Algolia-Application-Id": ALGOLIA_APP_ID,
+        "X-Algolia-Application-Id": appId,
       },
       body: JSON.stringify({
         requests: [
@@ -138,10 +143,11 @@ async function algoliaQueryWithStatus(
 
 async function algoliaQuery(
   apiKey: string,
+  appId: string,
   storeNumber: string,
   options: QueryOptions
 ): Promise<AlgoliaResult> {
-  const result = await algoliaQueryWithStatus(apiKey, storeNumber, options);
+  const result = await algoliaQueryWithStatus(apiKey, appId, storeNumber, options);
   if (!result.success || !result.result) {
     throw new Error(result.error ?? `Algolia error: ${result.status}`);
   }
@@ -211,12 +217,14 @@ function findBestSplit(
  * Fetch the complete product catalog for a store.
  *
  * @param apiKey - Algolia API key
+ * @param appId - Algolia application ID
  * @param storeNumber - Store number to fetch
  * @param onProgress - Optional callback for progress updates
  * @returns Fetch result with all products
  */
 export async function fetchCatalog(
   apiKey: string,
+  appId: string,
   storeNumber: string,
   onProgress?: (progress: FetchProgress) => void
 ): Promise<FetchResult> {
@@ -228,7 +236,7 @@ export async function fetchCatalog(
     // Get total count
     report({ phase: "planning", current: 0, total: 0, message: "Analyzing catalog structure..." });
 
-    const rootResult = await algoliaQuery(apiKey, storeNumber, {
+    const rootResult = await algoliaQuery(apiKey, appId, storeNumber, {
       hitsPerPage: 0,
       facets: ["*"],
     });
@@ -252,7 +260,7 @@ export async function fetchCatalog(
         message: `Building query plan... (${ready.length} queries)`,
       });
 
-      const result = await algoliaQuery(apiKey, storeNumber, {
+      const result = await algoliaQuery(apiKey, appId, storeNumber, {
         filters: task.filter ?? undefined,
         hitsPerPage: 0,
         facets: ["*"],
@@ -326,7 +334,7 @@ export async function fetchCatalog(
     for (const batch of batches) {
       const results = await Promise.all(
         batch.map(async (task) => {
-          const result = await algoliaQueryWithStatus(apiKey, storeNumber, {
+          const result = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
             filters: task.filter ?? undefined,
             hitsPerPage: MAX_HITS_PER_QUERY,
           });
@@ -340,7 +348,7 @@ export async function fetchCatalog(
         await sleep(currentDelay);
 
         for (const { task } of rateLimited) {
-          const retryResult = await algoliaQueryWithStatus(apiKey, storeNumber, {
+          const retryResult = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
             filters: task.filter ?? undefined,
             hitsPerPage: MAX_HITS_PER_QUERY,
           });
