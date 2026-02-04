@@ -1,7 +1,11 @@
 # Wegmans MCP Server Design
 
 **Date:** 2026-02-04
-**Status:** Approved, tentative details to be refined during implementation
+**Status:** Implemented (see [Current Architecture](#current-architecture-implemented) below)
+
+> **Note:** This document contains the original design proposal. The actual implementation
+> differs significantly - see the "Current Architecture" section and
+> [wegmans-mcp/docs/architecture.md](../../wegmans-mcp/docs/architecture.md) for details.
 
 ## Overview
 
@@ -454,11 +458,107 @@ Note: No default store in config. Store is always passed explicitly to tools. Kn
 
 **Principle:** Errors should be informative enough that Claude can either self-correct or explain the issue clearly.
 
-## Open Items
+## Open Items (Resolved)
 
-To be validated during implementation:
+These were validated during implementation:
 
-1. Algolia API key extraction method - where exactly is the key?
-2. Exact store number for Geneva, NY
-3. Database schema refinements as we see real data structure
-4. Algolia facet query format for category discovery
+1. ✅ Algolia API key extraction - Playwright intercepts requests to `*algolia*` endpoints
+2. ✅ Geneva, NY store number - Store 74
+3. ✅ Database schema - Significantly revised (see below)
+4. ✅ Category discovery - Categories extracted from product `categories.lvl0-4` fields
+
+---
+
+# Current Architecture (Implemented)
+
+> **See also:** [wegmans-mcp/docs/architecture.md](../../wegmans-mcp/docs/architecture.md) for full details.
+
+The implementation differs from the original design in several key ways:
+
+## Key Changes from Original Design
+
+### 1. Per-Store Database Architecture
+
+Instead of a single database with `store_products` junction table:
+
+```
+~/.local/share/wegmans-mcp/    # XDG-compliant (not ~/.config/)
+  settings.db        # API keys, active store setting
+  stores.db          # Store locations
+  stores/
+    74.db            # Store 74's products (merged schema)
+    101.db           # Store 101's products
+```
+
+**Why:** Query isolation - impossible to accidentally query wrong store's products.
+
+### 2. Simplified 2-Tool API
+
+Instead of 7 tools (`search`, `query`, `list_categories`, `list_stores`, `refresh`, `clear`, `refresh_api_key`):
+
+| Tool | Description |
+|------|-------------|
+| `query` | SQL queries with `database` parameter (`"stores"` or `"products"`) |
+| `setStore` | Select store and fetch catalog (~29,000 products) |
+
+**Why:** Claude can use SQL for everything. Simpler is better.
+
+### 3. Merged Products Table
+
+Instead of separate `products` and `store_products` tables:
+
+```sql
+-- Each store database has this merged schema
+CREATE TABLE products (
+  product_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  brand TEXT,
+  -- ... base fields ...
+  price_in_store REAL,      -- Store-specific (was in store_products)
+  aisle TEXT,               -- Store-specific (was in store_products)
+  is_available INTEGER,     -- Store-specific (was in store_products)
+  -- ... etc ...
+);
+```
+
+**Why:** No `store_number` column needed - each store has its own database file.
+
+### 4. Full Catalog Fetch
+
+Instead of incremental search-based population:
+
+- `setStore` fetches the **entire catalog** (~29,000 products) on first use
+- Subsequent queries are purely local (fast, offline)
+- Catalog refreshes if stale (>24 hours)
+
+**Why:** Complete data enables complex queries without "search first" workflow.
+
+### 5. Dynamic Schema Embedding
+
+Tool descriptions include the actual database schema:
+
+```
+STORES SCHEMA (database="stores"):
+CREATE TABLE stores (...)
+
+PRODUCTS SCHEMA (database="products"):
+CREATE TABLE products (...)
+```
+
+**Why:** Claude always knows the exact columns available for queries.
+
+## Typical Usage Flow
+
+1. Claude queries stores: `SELECT store_number, city FROM stores WHERE state = 'NY'`
+2. User/Claude calls: `setStore({ storeNumber: "74" })`
+3. Server fetches full catalog (first time only)
+4. Claude queries products: `SELECT name, price_in_store, aisle FROM products WHERE ...`
+
+## What Was Kept from Original Design
+
+- ✅ Headless, non-interactive operation
+- ✅ SQLite for local storage
+- ✅ Playwright for API key extraction
+- ✅ Algolia as data source
+- ✅ TypeScript with strict mode
+- ✅ Zod for validation
