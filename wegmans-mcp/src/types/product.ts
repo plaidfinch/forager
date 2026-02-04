@@ -22,10 +22,15 @@ export const StoreSchema = z.object({
 export type Store = z.infer<typeof StoreSchema>;
 
 // ============================================================================
-// Product Schema (store-independent product metadata)
+// Product Schema (merged: base product + store-specific fields)
 // ============================================================================
+// In the per-store database design, each store has its own database file.
+// The Product type now includes both base product metadata AND store-specific
+// fields (pricing, location, availability). storeNumber is not needed since
+// each database is specific to a single store.
 
 export const ProductSchema = z.object({
+  // Base product fields (required)
   productId: z.string(),
   name: z.string(),
   brand: z.string().nullable(),
@@ -41,17 +46,8 @@ export const ProductSchema = z.object({
   categoryPath: z.string().nullable(), // Full leaf path, e.g., "Dairy > Milk > Whole Milk"
   tagsFilter: z.string().nullable(), // JSON array, e.g., '["Organic", "Gluten Free"]'
   tagsPopular: z.string().nullable(), // JSON array, e.g., '["Wegmans Brand"]'
-});
 
-export type Product = z.infer<typeof ProductSchema>;
-
-// ============================================================================
-// StoreProduct Schema (store-specific price and location)
-// ============================================================================
-
-export const StoreProductSchema = z.object({
-  productId: z.string(),
-  storeNumber: z.string(),
+  // Store-specific fields (nullable - may not be available for all products)
   // Pricing
   priceInStore: z.number().nullable(),
   priceInStoreLoyalty: z.number().nullable(),
@@ -61,14 +57,14 @@ export const StoreProductSchema = z.object({
   // Location
   aisle: z.string().nullable(),
   shelf: z.string().nullable(),
-  // Availability
-  isAvailable: z.boolean(),
-  isSoldAtStore: z.boolean(),
+  // Availability (nullable for flexibility)
+  isAvailable: z.boolean().nullable(),
+  isSoldAtStore: z.boolean().nullable(),
   // Metadata
   lastUpdated: z.string().nullable(),
 });
 
-export type StoreProduct = z.infer<typeof StoreProductSchema>;
+export type Product = z.infer<typeof ProductSchema>;
 
 // ============================================================================
 // Serving Schema
