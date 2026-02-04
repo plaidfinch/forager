@@ -28,7 +28,8 @@ Exploration script version: 0cff491
   - Filter string: `storeNumber:74 AND fulfilmentType:instore AND excludeFromWeb:false AND isSoldAtStore:true`
   - Analytics tags: `store-74`, `fulfillment-instore`
   - Object IDs: `74-94427`, `74-12238` (format: `{storeNumber}-{skuId}`)
-- Conclusion: Store 74 is the Geneva, NY Wegmans store. The store number is embedded in object IDs and used as a filter.
+- Conclusion: Store number is embedded in object IDs and used as a filter. **UNKNOWN which store 74 corresponds to** - the browser selected this store automatically (likely via geolocation or cookies). No store name was observed in API responses.
+- Action needed: Explore `/stores` page or store selector to build store number → name mapping.
 
 ### Response Schema
 - Observed: Multi-query response structure with nested results array
@@ -73,7 +74,7 @@ Four distinct price points per product:
 
 ## Open Questions
 
-1. **Store listing endpoint**: How to get a list of all store numbers? Need to explore store selector or stores page.
+1. **Store number → name mapping (BLOCKING)**: Store 74 was used in queries but we don't know which physical store this is. Need to explore `/stores` page or store selector UI to build the mapping. This blocks using the correct store for Geneva, NY.
 2. **Category browsing**: How to browse by category without a search query?
 3. **Pagination**: Default `hitsPerPage` appears to be 20. What's the maximum allowed?
 4. **Rate limiting**: No rate limit errors observed, but should test with higher request volumes.
