@@ -60,7 +60,7 @@ describe("Database Connection", () => {
         )
         .all() as Array<{ name: string }>;
 
-      expect(tables.length).toBe(12); // Schema has exactly 12 tables
+      expect(tables.length).toBe(6); // Schema has exactly 6 tables
       expect(tables.map((t) => t.name)).toContain("products");
       expect(tables.map((t) => t.name)).toContain("stores");
     });

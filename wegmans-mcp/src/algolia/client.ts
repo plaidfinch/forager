@@ -28,7 +28,7 @@ export const ALGOLIA_PRODUCTS_INDEX = "products";
  * Base URL for Algolia API requests.
  * Uses the distributed search network (DSN) for performance.
  */
-export const ALGOLIA_BASE_URL = `https://${ALGOLIA_APP_ID.toLowerCase()}-dsn.algolia.net`;
+const ALGOLIA_BASE_URL = `https://${ALGOLIA_APP_ID.toLowerCase()}-dsn.algolia.net`;
 
 // ============================================================================
 // Request Building

@@ -6,6 +6,7 @@
  */
 
 import type Database from "better-sqlite3";
+import { executeQuery } from "../db/queries.js";
 
 export interface QueryToolResult {
   success: boolean;
@@ -26,24 +27,19 @@ export function queryTool(
   readonlyDb: Database.Database,
   sql: string
 ): QueryToolResult {
-  try {
-    const stmt = readonlyDb.prepare(sql);
-    const rows = stmt.all() as Array<Record<string, unknown>>;
+  const result = executeQuery(readonlyDb, sql);
 
-    // Extract column names from the statement
-    const columns = stmt.columns().map((col) => col.name);
-
-    return {
-      success: true,
-      columns,
-      rows,
-      rowCount: rows.length,
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+  if (!result.success || !result.columns || !result.rows) {
     return {
       success: false,
-      error: message,
+      error: result.error ?? "Query failed",
     };
   }
+
+  return {
+    success: true,
+    columns: result.columns,
+    rows: result.rows,
+    rowCount: result.rows.length,
+  };
 }

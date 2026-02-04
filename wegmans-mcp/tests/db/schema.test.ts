@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { initializeSchema, SCHEMA_VERSION } from "../../src/db/schema.js";
+import { initializeSchema } from "../../src/db/schema.js";
 
 describe("Database Schema", () => {
   let db: Database.Database;
@@ -29,25 +29,15 @@ describe("Database Schema", () => {
 
     const tableNames = tables.map((t) => t.name).sort();
 
-    // Core tables
+    // All 6 tables
     expect(tableNames).toContain("api_keys");
     expect(tableNames).toContain("stores");
-    expect(tableNames).toContain("searches");
     expect(tableNames).toContain("products");
     expect(tableNames).toContain("store_products");
     expect(tableNames).toContain("servings");
     expect(tableNames).toContain("nutrition_facts");
 
-    // Category system
-    expect(tableNames).toContain("categories");
-    expect(tableNames).toContain("product_categories");
-
-    // Tag system
-    expect(tableNames).toContain("tags");
-    expect(tableNames).toContain("product_tags");
-
-    // Search tracking
-    expect(tableNames).toContain("search_products");
+    expect(tableNames).toHaveLength(6);
   });
 
   it("is idempotent - can be called multiple times without error", () => {
@@ -59,11 +49,6 @@ describe("Database Schema", () => {
       .prepare(`SELECT name FROM sqlite_master WHERE type='table'`)
       .all();
     expect(tables.length).toBeGreaterThan(0);
-  });
-
-  it("exports schema version as a positive number", () => {
-    expect(typeof SCHEMA_VERSION).toBe("number");
-    expect(SCHEMA_VERSION).toBeGreaterThan(0);
   });
 
   it("creates stores table with correct columns", () => {

@@ -150,7 +150,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.success).toBe(true);
       expect(response.tables).toBeDefined();
       expect(Array.isArray(response.tables)).toBe(true);
-      expect(response.tables.length).toBe(12);
+      expect(response.tables.length).toBe(6);
 
       // Verify key tables are present
       const tableNames = response.tables.map((t: { name: string }) => t.name);

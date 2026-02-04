@@ -59,7 +59,7 @@ export function parseAlgoliaAppIdFromUrl(url: string): string | null {
 /**
  * Extract store number from Algolia request URL or filter string.
  */
-export function parseStoreNumberFromRequest(
+function parseStoreNumberFromRequest(
   url: string,
   postData?: string
 ): string | null {
