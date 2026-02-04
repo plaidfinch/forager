@@ -36,6 +36,24 @@ claude mcp add --transport stdio forager -- node $PWD/dist/src/index.js
 claude mcp remove forager
 ```
 
+### Updating
+
+When the repo is updated, rebuild to get the latest changes:
+
+```bash
+git pull
+npm install      # In case dependencies changed
+npm run build    # Rebuild TypeScript
+```
+
+The MCP server points to the built files, so changes take effect on the next Claude Code restart. No need to re-run `claude mcp add`.
+
+If Playwright extraction stops working after an update, you may need to update the browser:
+
+```bash
+npx playwright install chromium
+```
+
 ## Data Location
 
 Data is stored following the XDG Base Directory Specification:
