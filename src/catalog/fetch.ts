@@ -5,6 +5,10 @@
  * to work around the 1000 result limit.
  */
 
+/**
+ * Algolia enforces a hard limit of 1000 results per query.
+ * Queries returning more must be split using facet filters.
+ */
 const MAX_HITS_PER_QUERY = 1000;
 
 /**
@@ -14,10 +18,30 @@ function getAlgoliaUrl(appId: string): string {
   return `https://${appId.toLowerCase()}-dsn.algolia.net/1/indexes/*/queries`;
 }
 
-// Concurrency settings (benchmarked optimal: 30)
+/**
+ * Number of concurrent Algolia queries during fetch phase.
+ * Benchmarked: 30 provides good throughput without triggering rate limits.
+ * Higher values (50+) cause 429 errors; lower values are slower.
+ */
 const CONCURRENCY = 30;
+
+/**
+ * Base delay between batches of concurrent queries (milliseconds).
+ * Keeps us under Algolia's rate limit during normal operation.
+ */
 const BASE_DELAY_MS = 20;
+
+/**
+ * Maximum backoff delay when rate limited (milliseconds).
+ * After 429 errors, we exponentially back off up to this limit.
+ */
 const MAX_BACKOFF_MS = 30000;
+
+/**
+ * Delay between queries during planning phase (milliseconds).
+ * Planning queries are sequential, so we add small delays to avoid
+ * overwhelming the API while building the query plan.
+ */
 const PLANNING_DELAY_MS = 30;
 
 export interface AlgoliaHit {
