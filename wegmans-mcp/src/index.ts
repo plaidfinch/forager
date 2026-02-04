@@ -2,10 +2,10 @@
  * MCP Server Entry Point for Wegmans Product Data.
  *
  * Provides 4 tools for interacting with Wegmans product data:
- * - query: Execute read-only SQL queries against the database
+ * - listStores: List available Wegmans stores
+ * - setStore: Select a store and fetch its catalog
  * - schema: Get table DDL for understanding the database structure
- * - search: Search and populate products from Algolia
- * - refreshApiKey: Extract a fresh Algolia API key
+ * - query: Execute read-only SQL queries against the database
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -27,7 +27,6 @@ import {
 } from "./db/connection.js";
 import { queryTool } from "./tools/query.js";
 import { schemaTool } from "./tools/schema.js";
-import { refreshApiKeyTool } from "./tools/refreshApiKey.js";
 import { setStoreTool, getActiveStore } from "./tools/setStore.js";
 import { listStoresTool } from "./tools/listStores.js";
 import { getCatalogStatus, type FetchProgress } from "./catalog/index.js";
@@ -55,16 +54,6 @@ export const TOOL_DEFINITIONS = [
     name: "schema",
     description:
       "Get the database schema (CREATE TABLE/VIEW statements) to understand available tables and columns. Includes categories/tags ontology tables and views for querying product taxonomy. Use product_tags view to join products with their filter/popular tags.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
-      required: [] as string[],
-    },
-  },
-  {
-    name: "refreshApiKey",
-    description:
-      "Extract a fresh Algolia API key from the Wegmans website. Use this first before other tools, or when search fails due to an expired key.",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -109,23 +98,6 @@ export const TOOL_DEFINITIONS = [
     },
   },
 ];
-
-/**
- * Get the most recent API key from the database.
- *
- * @param db - Database connection
- * @returns The API key string, or null if no keys exist
- */
-export function getApiKeyFromDatabase(db: Database.Database): string | null {
-  const stmt = db.prepare(`
-    SELECT key FROM api_keys
-    ORDER BY id DESC
-    LIMIT 1
-  `);
-
-  const row = stmt.get() as { key: string } | undefined;
-  return row?.key ?? null;
-}
 
 /**
  * Create and configure the MCP server with tool handlers.
@@ -178,13 +150,6 @@ export function createServer(): Server {
           };
         }
 
-        case "refreshApiKey": {
-          const result = await refreshApiKeyTool(db);
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-          };
-        }
-
         case "setStore": {
           const { storeNumber, forceRefresh } = args as {
             storeNumber?: string;
@@ -205,23 +170,6 @@ export function createServer(): Server {
             };
           }
 
-          // Get API key from database
-          const apiKey = getApiKeyFromDatabase(db);
-          if (!apiKey) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    success: false,
-                    error:
-                      "No API key found. Use refreshApiKey tool first to extract one.",
-                  }),
-                },
-              ],
-            };
-          }
-
           const onProgress = (progress: FetchProgress) => {
             // Log progress to stderr
             process.stderr.write(`[wegmans-mcp] ${progress.message}\n`);
@@ -229,7 +177,6 @@ export function createServer(): Server {
 
           const result = await setStoreTool(db, {
             storeNumber,
-            apiKey,
             forceRefresh,
             onProgress,
           });
@@ -311,12 +258,6 @@ function log(message: string): void {
 function reportCatalogStatus(db: Database.Database): void {
   const activeStore = getActiveStore(db);
   const status = getCatalogStatus(db);
-  const hasApiKey = getApiKeyFromDatabase(db) !== null;
-
-  if (!hasApiKey) {
-    log("No API key configured. Use refreshApiKey tool first.");
-    return;
-  }
 
   if (!activeStore) {
     log("No store selected. Use setStore tool to select a Wegmans store.");

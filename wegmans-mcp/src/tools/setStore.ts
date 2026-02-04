@@ -2,6 +2,7 @@
  * Set store tool for selecting the active Wegmans store.
  *
  * Sets the active store and triggers a catalog refresh if needed.
+ * Automatically handles API key extraction if needed.
  */
 
 import type Database from "better-sqlite3";
@@ -10,12 +11,11 @@ import {
   refreshCatalog,
   type FetchProgress,
 } from "../catalog/index.js";
+import { extractAlgoliaKey } from "../algolia/keyExtractor.js";
 
 export interface SetStoreOptions {
   /** Store number to set as active */
   storeNumber: string;
-  /** Algolia API key */
-  apiKey: string;
   /** Force refresh even if catalog is fresh */
   forceRefresh?: boolean;
   /** Progress callback */
@@ -79,7 +79,67 @@ function getStoreProductCount(db: Database.Database, storeNumber: string): numbe
 }
 
 /**
+ * Get the most recent API key from the database.
+ */
+function getApiKey(db: Database.Database): string | null {
+  const row = db
+    .prepare("SELECT key FROM api_keys ORDER BY id DESC LIMIT 1")
+    .get() as { key: string } | undefined;
+  return row?.key ?? null;
+}
+
+/**
+ * Store an API key in the database.
+ */
+function storeApiKey(db: Database.Database, apiKey: string, appId: string): void {
+  db.prepare(
+    "INSERT INTO api_keys (key, app_id, extracted_at) VALUES (?, ?, ?)"
+  ).run(apiKey, appId, new Date().toISOString());
+}
+
+/**
+ * Get or extract an API key. Extracts a new one if none exists.
+ */
+async function ensureApiKey(
+  db: Database.Database,
+  onProgress?: (progress: FetchProgress) => void
+): Promise<string | null> {
+  // Try existing key first
+  const existingKey = getApiKey(db);
+  if (existingKey) {
+    return existingKey;
+  }
+
+  // Extract new key
+  onProgress?.({
+    phase: "planning",
+    current: 0,
+    total: 0,
+    message: "Extracting API key from Wegmans website...",
+  });
+
+  const result = await extractAlgoliaKey({ headless: true, timeout: 60000 });
+
+  if (!result.success || !result.apiKey) {
+    return null;
+  }
+
+  // Store the key
+  storeApiKey(db, result.apiKey, result.appId ?? "");
+
+  onProgress?.({
+    phase: "planning",
+    current: 0,
+    total: 0,
+    message: "API key extracted successfully",
+  });
+
+  return result.apiKey;
+}
+
+/**
  * Set the active store and optionally refresh the catalog.
+ * Automatically extracts API key if needed.
  *
  * @param db - Database connection
  * @param options - Set store options
@@ -89,7 +149,7 @@ export async function setStoreTool(
   db: Database.Database,
   options: SetStoreOptions
 ): Promise<SetStoreResult> {
-  const { storeNumber, apiKey, forceRefresh = false, onProgress } = options;
+  const { storeNumber, forceRefresh = false, onProgress } = options;
 
   try {
     // Ensure store exists in database
@@ -104,6 +164,18 @@ export async function setStoreTool(
     const needsRefresh = forceRefresh || storeProductCount === 0 || status.isStale;
 
     if (needsRefresh) {
+      // Get or extract API key
+      const apiKey = await ensureApiKey(db, onProgress);
+      if (!apiKey) {
+        return {
+          success: false,
+          storeNumber,
+          refreshed: false,
+          productCount: storeProductCount,
+          error: "Failed to extract API key from Wegmans website",
+        };
+      }
+
       const result = await refreshCatalog(db, apiKey, storeNumber, onProgress);
 
       if (!result.success) {
