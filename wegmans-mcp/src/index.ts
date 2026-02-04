@@ -27,7 +27,6 @@ import {
 } from "./db/connection.js";
 import { queryTool } from "./tools/query.js";
 import { schemaTool } from "./tools/schema.js";
-import { searchTool } from "./tools/search.js";
 import { refreshApiKeyTool } from "./tools/refreshApiKey.js";
 import { setStoreTool, getActiveStore } from "./tools/setStore.js";
 import { listStoresTool } from "./tools/listStores.js";
@@ -60,34 +59,6 @@ export const TOOL_DEFINITIONS = [
       type: "object" as const,
       properties: {},
       required: [] as string[],
-    },
-  },
-  {
-    name: "search",
-    description:
-      "Search for products on Wegmans and populate the local database with results. Requires an API key (use refreshApiKey first if needed). Use filters for category/tag filtering.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        query: {
-          type: "string",
-          description: "Search query (e.g., 'milk', 'organic apples')",
-        },
-        storeNumber: {
-          type: "string",
-          description: "Wegmans store number (e.g., '74' for Geneva)",
-        },
-        hitsPerPage: {
-          type: "number",
-          description: "Number of results per page (default: 20)",
-        },
-        filters: {
-          type: "string",
-          description:
-            "Raw Algolia filter string. Examples: 'filterTags:Organic', 'categories.lvl0:Dairy AND filterTags:\"Gluten Free\"', 'consumerBrandName:Wegmans'",
-        },
-      },
-      required: ["query", "storeNumber"],
     },
   },
   {
@@ -202,58 +173,6 @@ export function createServer(): Server {
 
         case "schema": {
           const result = schemaTool(db);
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-          };
-        }
-
-        case "search": {
-          const { query, storeNumber, hitsPerPage, filters } = args as {
-            query?: string;
-            storeNumber?: string;
-            hitsPerPage?: number;
-            filters?: string;
-          };
-
-          if (typeof query !== "string" || typeof storeNumber !== "string") {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    success: false,
-                    error: "Missing required parameters: query and storeNumber",
-                  }),
-                },
-              ],
-            };
-          }
-
-          // Get API key from database
-          const apiKey = getApiKeyFromDatabase(db);
-          if (!apiKey) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    success: false,
-                    error:
-                      "No API key found. Use refreshApiKey tool first to extract one.",
-                  }),
-                },
-              ],
-            };
-          }
-
-          const searchOptions = {
-            query,
-            storeNumber,
-            apiKey,
-            ...(hitsPerPage !== undefined && { hitsPerPage }),
-            ...(filters !== undefined && { filters }),
-          };
-          const result = await searchTool(db, searchOptions);
           return {
             content: [{ type: "text", text: JSON.stringify(result) }],
           };

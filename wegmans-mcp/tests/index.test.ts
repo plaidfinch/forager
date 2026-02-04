@@ -34,8 +34,8 @@ describe("MCP Server", () => {
   });
 
   describe("TOOL_DEFINITIONS", () => {
-    it("defines 6 tools", () => {
-      expect(TOOL_DEFINITIONS).toHaveLength(6);
+    it("defines 5 tools", () => {
+      expect(TOOL_DEFINITIONS).toHaveLength(5);
     });
 
     it("defines query tool with sql input", () => {
@@ -61,23 +61,6 @@ describe("MCP Server", () => {
         type: "object",
         properties: {},
         required: [],
-      });
-    });
-
-    it("defines search tool with query, storeNumber, and optional hitsPerPage/filters", () => {
-      const searchTool = TOOL_DEFINITIONS.find((t) => t.name === "search");
-
-      expect(searchTool).toBeDefined();
-      expect(searchTool?.description).toBeDefined();
-      expect(searchTool?.inputSchema).toEqual({
-        type: "object",
-        properties: {
-          query: { type: "string", description: expect.any(String) },
-          storeNumber: { type: "string", description: expect.any(String) },
-          hitsPerPage: { type: "number", description: expect.any(String) },
-          filters: { type: "string", description: expect.any(String) },
-        },
-        required: ["query", "storeNumber"],
       });
     });
 
