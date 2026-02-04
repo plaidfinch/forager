@@ -10,7 +10,7 @@ import { existsSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { initializeSchema } from "../../src/db/schema.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
 import { schemaTool } from "../../src/tools/schema.js";
 
 describe("schemaTool", () => {
@@ -27,7 +27,7 @@ describe("schemaTool", () => {
     // Create and initialize schema
     db = new Database(testDbPath);
     db.pragma("foreign_keys = ON");
-    initializeSchema(db);
+    initializeStoreDataSchema(db);
   });
 
   afterEach(() => {
@@ -42,7 +42,7 @@ describe("schemaTool", () => {
 
     expect(result.success).toBe(true);
     expect(result.tables).toBeDefined();
-    expect(result.tables).toHaveLength(9); // Schema has exactly 9 tables
+    expect(result.tables).toHaveLength(5); // Store data schema has 5 tables
     expect(result.error).toBeUndefined();
   });
 
@@ -59,7 +59,7 @@ describe("schemaTool", () => {
     }
   });
 
-  it("key tables are present (products, store_products, nutrition_facts)", () => {
+  it("key tables are present (products, servings, nutrition_facts)", () => {
     const result = schemaTool(db);
 
     expect(result.success).toBe(true);
@@ -68,11 +68,11 @@ describe("schemaTool", () => {
     const tableNames = result.tables!.map((t) => t.name);
 
     expect(tableNames).toContain("products");
-    expect(tableNames).toContain("store_products");
+    expect(tableNames).toContain("servings");
     expect(tableNames).toContain("nutrition_facts");
   });
 
-  it("returns all 9 expected tables", () => {
+  it("returns all 5 expected tables for store data schema", () => {
     const result = schemaTool(db);
 
     expect(result.success).toBe(true);
@@ -80,18 +80,14 @@ describe("schemaTool", () => {
 
     const tableNames = result.tables!.map((t) => t.name);
 
-    // All tables defined in src/db/schema.ts
-    expect(tableNames).toContain("api_keys");
-    expect(tableNames).toContain("settings");
-    expect(tableNames).toContain("stores");
+    // All tables defined in initializeStoreDataSchema
     expect(tableNames).toContain("products");
-    expect(tableNames).toContain("store_products");
     expect(tableNames).toContain("servings");
     expect(tableNames).toContain("nutrition_facts");
     expect(tableNames).toContain("categories");
     expect(tableNames).toContain("tags");
 
-    expect(result.tables).toHaveLength(9);
+    expect(result.tables).toHaveLength(5);
   });
 
   it("DDL includes column definitions", () => {

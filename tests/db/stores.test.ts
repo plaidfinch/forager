@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import { initializeSchema } from "../../src/db/schema.js";
+import { initializeStoresSchema } from "../../src/db/schema.js";
 import {
   upsertStore,
   getStore,
@@ -18,7 +18,7 @@ describe("Store CRUD Operations", () => {
 
   beforeEach(() => {
     db = new Database(":memory:");
-    initializeSchema(db);
+    initializeStoresSchema(db);
   });
 
   afterEach(() => {
