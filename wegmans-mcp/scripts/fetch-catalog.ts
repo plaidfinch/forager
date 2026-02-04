@@ -20,9 +20,9 @@ const ALGOLIA_URL = `https://${ALGOLIA_APP_ID.toLowerCase()}-dsn.algolia.net/1/i
 const MAX_HITS_PER_QUERY = 1000;
 const DEFAULT_STORE = "74";
 
-// Concurrency settings
-const CONCURRENCY = 5;           // Parallel requests during fetch phase
-const BASE_DELAY_MS = 50;        // Base delay between batches
+// Concurrency settings (benchmarked optimal: 30)
+const CONCURRENCY = 30;          // Parallel requests during fetch phase
+const BASE_DELAY_MS = 20;        // Base delay between batches
 const MAX_BACKOFF_MS = 30000;    // Max delay on rate limit
 const PLANNING_DELAY_MS = 30;    // Delay during planning phase (sequential)
 
