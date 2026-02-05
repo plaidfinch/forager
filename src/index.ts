@@ -94,7 +94,7 @@ export function getToolDefinitions(storesDb?: Database.Database, storeDataDb?: D
   }
 
   // Get products schema (only if store is selected)
-  let productsSchemaText = "No store selected. Use setStore first to select a Wegmans store, then query products.";
+  let productsSchemaText = "No store selected. Ask the user which Wegmans location they want (by city, state, or zip code), then use setStore to select it.";
   if (storeDataDb) {
     const productsSchemaResult = schemaTool(storeDataDb);
     productsSchemaText = formatSchemaForDescription(productsSchemaResult);
@@ -134,14 +134,14 @@ ${productsSchemaText}`,
     {
       name: "setStore",
       description:
-        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store. Query the stores table (database='stores') to find store numbers and locations.",
+        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store. IMPORTANT: Before calling this tool, ask the user which Wegmans store they want to use (by city, state, or zip code), then query the stores table (database='stores') to find the matching store number.",
       inputSchema: {
         type: "object" as const,
         properties: {
           storeNumber: {
             type: "string",
             description:
-              "Wegmans store number (e.g., '74' for Geneva, NY). Query the stores table to find store numbers.",
+              "Wegmans store number. Query the stores table to find store numbers by city, state, or zip code.",
           },
           forceRefresh: {
             type: "boolean",
@@ -239,7 +239,7 @@ export function createServer(): Server {
                     type: "text",
                     text: JSON.stringify({
                       success: false,
-                      error: "No store selected. Use setStore first to select a Wegmans store.",
+                      error: "No store selected. Ask the user which Wegmans location they want (by city, state, or zip code), then use setStore to select it.",
                     }),
                   },
                 ],
