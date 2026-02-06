@@ -162,7 +162,7 @@ async function ensureApiCredentials(
     message: "Extracting API credentials from Wegmans website...",
   });
 
-  const extract = extractFn ?? (() => extractAlgoliaKey({ headless: true, timeout: 60000 }));
+  const extract = extractFn ?? (() => extractAlgoliaKey({ timeout: 60000 }));
   const result = await extract();
 
   if (!result.success || !result.apiKey || !result.appId) {

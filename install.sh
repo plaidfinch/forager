@@ -9,9 +9,6 @@ npm install
 echo "Building..."
 npm run build
 
-echo "Installing Playwright browser..."
-npx playwright install chromium
-
 echo "Adding to Claude Code..."
 claude mcp add --transport stdio forager -- node "$PWD/dist/src/index.js"
 

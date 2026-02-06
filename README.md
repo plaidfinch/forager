@@ -17,7 +17,7 @@ cd forager
 ./install.sh
 ```
 
-This installs dependencies, builds, installs Playwright, and adds the server to Claude Code.
+This installs dependencies, builds, and adds the server to Claude Code.
 
 Then restart Claude Code and try: "Find Wegmans stores near me"
 
@@ -26,7 +26,6 @@ Then restart Claude Code and try: "Find Wegmans stores near me"
 ```bash
 npm install
 npm run build
-npx playwright install chromium
 claude mcp add --transport stdio forager -- node $PWD/dist/src/index.js
 ```
 
@@ -47,12 +46,6 @@ npm run build    # Rebuild TypeScript
 ```
 
 The MCP server points to the built files, so changes take effect on the next Claude Code restart. No need to re-run `claude mcp add`.
-
-If Playwright extraction stops working after an update, you may need to update the browser:
-
-```bash
-npx playwright install chromium
-```
 
 ## Data Location
 
@@ -212,7 +205,7 @@ CREATE VIEW product_tags AS ...;
 ```bash
 npm test           # Run tests
 npm run build      # Build TypeScript
-npm run explore    # Explore Algolia API (debugging)
+npm run start      # Start MCP server
 ```
 
 ### Windows

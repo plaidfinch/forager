@@ -27,8 +27,7 @@ import { randomUUID } from "node:crypto";
  * 1. Process spawning - These tests spawn the MCP server as a child process,
  *    which can behave differently across CI platforms (GitHub Actions, etc.)
  * 2. Network dependencies - Tests may hit the real Wegmans API for stores data
- * 3. Playwright/browser - Key extraction requires Chromium, which needs
- *    additional CI setup (playwright install-deps)
+ * 3. Network dependencies - Key extraction fetches JS from wegmans.com
  * 4. Timing sensitivity - Stdio communication can have race conditions in CI
  *
  * To run locally: npm test -- tests/e2e/mcp-server.test.ts

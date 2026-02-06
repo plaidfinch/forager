@@ -10,15 +10,12 @@
 import { describe, it, expect } from "vitest";
 import { extractAlgoliaKey } from "../../src/algolia/keyExtractor.js";
 
-// Skip in CI - these require network access and a browser
+// Skip in CI - these require network access
 const SKIP_INTEGRATION = process.env.CI === "true" || process.env.SKIP_INTEGRATION === "true";
 
 describe.skipIf(SKIP_INTEGRATION)("Algolia Key Extractor (integration)", () => {
-  it("extracts API key from Wegmans website", { timeout: 90000 }, async () => {
-    const result = await extractAlgoliaKey({
-      headless: true,
-      timeout: 60000,
-    });
+  it("extracts API key from Wegmans website", { timeout: 30000 }, async () => {
+    const result = await extractAlgoliaKey({ timeout: 20000 });
 
     console.log("Extraction result:", {
       success: result.success,
