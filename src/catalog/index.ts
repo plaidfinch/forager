@@ -5,7 +5,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { fetchCatalog, type FetchProgress, type AlgoliaHit } from "./fetch.js";
+import { fetchCatalog, AlgoliaError, type FetchProgress, type AlgoliaHit } from "./fetch.js";
 import { populateOntology, getOntologyStats } from "./ontology.js";
 import {
   transformHitToProduct,
@@ -95,7 +95,10 @@ export function getCatalogStatus(db: Database.Database): CatalogStatus {
 }
 
 /**
- * Refresh the catalog by fetching all products and populating the database.
+ * Refresh the catalog by streaming products from Algolia into the database.
+ *
+ * Products are written in per-batch transactions as they arrive from the API,
+ * keeping memory usage constant regardless of catalog size.
  *
  * @param db - Database connection
  * @param apiKey - Algolia API key
@@ -111,70 +114,67 @@ export async function refreshCatalog(
   storeNumber: string,
   onProgress?: (progress: FetchProgress) => void
 ): Promise<RefreshResult> {
-  // Fetch products
-  const fetchResult = await fetchCatalog(apiKey, appId, storeNumber, onProgress);
+  try {
+    const beforeStats = getOntologyStats(db);
 
-  if (!fetchResult.success) {
+    // Clear ontology tables so counts are accurate for the fresh catalog
+    db.exec("DELETE FROM categories");
+    db.exec("DELETE FROM tags");
+
+    const now = new Date().toISOString();
+    let productsAdded = 0;
+
+    // Process each batch in its own transaction
+    const processBatch = db.transaction((hits: AlgoliaHit[]) => {
+      populateOntology(db, hits);
+
+      for (const hit of hits) {
+        const product = {
+          ...transformHitToProduct(hit),
+          lastUpdated: now,
+        };
+        const serving = transformHitToServing(hit);
+        const nutritionFacts = transformHitToNutritionFacts(hit);
+
+        upsertProduct(db, product);
+
+        if (serving) {
+          upsertServing(db, serving);
+        }
+
+        if (nutritionFacts.length > 0) {
+          upsertNutritionFacts(db, nutritionFacts);
+        }
+
+        productsAdded++;
+      }
+    });
+
+    for await (const batch of fetchCatalog(apiKey, appId, storeNumber, onProgress)) {
+      processBatch(batch);
+    }
+
+    const afterStats = getOntologyStats(db);
+
+    return {
+      success: true,
+      productsAdded,
+      categoriesAdded: afterStats.categoryCount - beforeStats.categoryCount,
+      tagsAdded: afterStats.tagCount - beforeStats.tagCount,
+    };
+  } catch (err) {
     const result: RefreshResult = {
       success: false,
       productsAdded: 0,
       categoriesAdded: 0,
       tagsAdded: 0,
-      error: fetchResult.error,
+      error: err instanceof Error ? err.message : String(err),
     };
-    if (fetchResult.status !== undefined) {
-      result.status = fetchResult.status;
+    if (err instanceof AlgoliaError) {
+      result.status = err.status;
     }
     return result;
   }
-
-  // Get initial ontology stats
-  const beforeStats = getOntologyStats(db);
-
-  // Populate ontology tables
-  populateOntology(db, fetchResult.products);
-
-  // Insert products into database
-  const now = new Date().toISOString();
-  let productsAdded = 0;
-
-  // Use transaction for bulk insert
-  // In the per-store database design, we use single transformHitToProduct
-  // which returns complete Product with all fields (base + store-specific).
-  const insertProducts = db.transaction((hits: AlgoliaHit[]) => {
-    for (const hit of hits) {
-      const product = {
-        ...transformHitToProduct(hit),
-        lastUpdated: now,
-      };
-      const serving = transformHitToServing(hit);
-      const nutritionFacts = transformHitToNutritionFacts(hit);
-
-      upsertProduct(db, product);
-
-      if (serving) {
-        upsertServing(db, serving);
-      }
-
-      if (nutritionFacts.length > 0) {
-        upsertNutritionFacts(db, nutritionFacts);
-      }
-
-      productsAdded++;
-    }
-  });
-
-  insertProducts(fetchResult.products);
-
-  // Get final ontology stats
-  const afterStats = getOntologyStats(db);
-
-  return {
-    success: true,
-    productsAdded,
-    categoriesAdded: afterStats.categoryCount - beforeStats.categoryCount,
-    tagsAdded: afterStats.tagCount - beforeStats.tagCount,
-  };
 }
 
 /**

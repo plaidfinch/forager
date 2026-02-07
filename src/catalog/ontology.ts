@@ -106,33 +106,27 @@ export function populateOntology(db: Database.Database, hits: AlgoliaHit[]): voi
     }
   }
 
-  // Insert categories
+  // Upsert categories — accumulates counts across repeated calls
   const insertCategory = db.prepare(`
-    INSERT OR REPLACE INTO categories (path, name, level, product_count)
+    INSERT INTO categories (path, name, level, product_count)
     VALUES (?, ?, ?, ?)
+    ON CONFLICT(path) DO UPDATE SET product_count = product_count + excluded.product_count
   `);
 
-  const insertCategories = db.transaction(() => {
-    for (const { info, count } of categoryCounts.values()) {
-      insertCategory.run(info.path, info.name, info.level, count);
-    }
-  });
+  for (const { info, count } of categoryCounts.values()) {
+    insertCategory.run(info.path, info.name, info.level, count);
+  }
 
-  insertCategories();
-
-  // Insert tags
+  // Upsert tags — accumulates counts across repeated calls
   const insertTag = db.prepare(`
-    INSERT OR REPLACE INTO tags (name, type, product_count)
+    INSERT INTO tags (name, type, product_count)
     VALUES (?, ?, ?)
+    ON CONFLICT(name, type) DO UPDATE SET product_count = product_count + excluded.product_count
   `);
 
-  const insertTags = db.transaction(() => {
-    for (const { info, count } of tagCounts.values()) {
-      insertTag.run(info.name, info.type, count);
-    }
-  });
-
-  insertTags();
+  for (const { info, count } of tagCounts.values()) {
+    insertTag.run(info.name, info.type, count);
+  }
 }
 
 /**

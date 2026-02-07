@@ -80,7 +80,7 @@ interface SplitTask {
 /**
  * Custom error class that preserves HTTP status code from Algolia responses.
  */
-class AlgoliaError extends Error {
+export class AlgoliaError extends Error {
   constructor(
     message: string,
     public readonly status: number
@@ -97,24 +97,10 @@ export interface FetchProgress {
   message: string;
 }
 
-export type FetchResult =
-  | {
-      success: true;
-      products: AlgoliaHit[];
-      queryCount: number;
-      totalProducts: number;
-      coverage: number;
-    }
-  | {
-      success: false;
-      products: AlgoliaHit[];
-      queryCount: number;
-      totalProducts: number;
-      coverage: number;
-      error: string;
-      /** HTTP status code if the error was from an HTTP response */
-      status?: number;
-    };
+export interface FetchSummary {
+  queryCount: number;
+  totalProducts: number;
+}
 
 /** Split array into chunks of size n */
 function chunk<T>(arr: T[], n: number): T[][] {
@@ -266,206 +252,180 @@ function findBestSplit(
 }
 
 /**
- * Fetch the complete product catalog for a store.
+ * Fetch the complete product catalog for a store as a stream of batches.
+ *
+ * Yields arrays of AlgoliaHit[], one per batch of concurrent queries.
+ * Each batch contains up to CONCURRENCY * MAX_HITS_PER_QUERY hits.
+ * Errors (including auth errors) throw rather than returning error objects.
  *
  * @param apiKey - Algolia API key
  * @param appId - Algolia application ID
  * @param storeNumber - Store number to fetch
  * @param onProgress - Optional callback for progress updates
- * @returns Fetch result with all products
+ * @yields Batches of product hits
  */
-export async function fetchCatalog(
+export async function* fetchCatalog(
   apiKey: string,
   appId: string,
   storeNumber: string,
   onProgress?: (progress: FetchProgress) => void
-): Promise<FetchResult> {
+): AsyncGenerator<AlgoliaHit[]> {
   const report = (progress: FetchProgress) => {
     if (onProgress) onProgress(progress);
   };
 
-  try {
-    // Get total count
-    report({ phase: "planning", current: 0, total: 0, message: "Analyzing catalog structure..." });
+  // Get total count
+  report({ phase: "planning", current: 0, total: 0, message: "Analyzing catalog structure..." });
 
-    const rootResult = await algoliaQuery(apiKey, appId, storeNumber, {
-      hitsPerPage: 0,
-      facets: ["*"],
-    });
+  const rootResult = await algoliaQuery(apiKey, appId, storeNumber, {
+    hitsPerPage: 0,
+    facets: ["*"],
+  });
 
-    const totalProducts = rootResult.nbHits;
+  const totalProducts = rootResult.nbHits;
 
-    // Build query plan
-    const queue: SplitTask[] = [{ name: "root", filter: null }];
-    const ready: SplitTask[] = [];
-    let iterations = 0;
-    const maxIterations = 500;
+  // Build query plan
+  const queue: SplitTask[] = [{ name: "root", filter: null }];
+  const ready: SplitTask[] = [];
+  let iterations = 0;
+  const maxIterations = 500;
 
-    while (queue.length > 0 && iterations < maxIterations) {
-      iterations++;
-      const task = queue.shift()!;
-
-      report({
-        phase: "planning",
-        current: ready.length,
-        total: ready.length + queue.length,
-        message: `Building query plan... (${ready.length} queries)`,
-      });
-
-      const result = await algoliaQuery(apiKey, appId, storeNumber, {
-        ...(task.filter ? { filters: task.filter } : {}),
-        hitsPerPage: 0,
-        facets: ["*"],
-      });
-
-      const count = result.nbHits;
-
-      if (count === 0) continue;
-
-      if (count <= MAX_HITS_PER_QUERY) {
-        ready.push(task);
-        continue;
-      }
-
-      const split = findBestSplit(result.facets ?? {}, count);
-
-      if (split) {
-        const coveredCount = split.values.reduce((sum, v) => sum + v.count, 0);
-        const uncoveredCount = count - coveredCount;
-
-        for (const { value } of split.values) {
-          const quotedValue = value.includes(" ") ? `"${value}"` : value;
-          const newFilter = task.filter
-            ? `${task.filter} AND ${split.attr}:${quotedValue}`
-            : `${split.attr}:${quotedValue}`;
-
-          queue.push({
-            name: `${split.attr}:${value}`,
-            filter: newFilter,
-          });
-        }
-
-        if (uncoveredCount > 0) {
-          const notClauses = split.values
-            .map(({ value }) => {
-              const quotedValue = value.includes(" ") ? `"${value}"` : value;
-              return `NOT ${split.attr}:${quotedValue}`;
-            })
-            .join(" AND ");
-
-          const remainderFilter = task.filter
-            ? `${task.filter} AND ${notClauses}`
-            : notClauses;
-
-          queue.push({
-            name: `NOT ${split.attr}`,
-            filter: remainderFilter,
-          });
-        }
-      } else {
-        ready.push(task);
-      }
-
-      await sleep(PLANNING_DELAY_MS);
-    }
+  while (queue.length > 0 && iterations < maxIterations) {
+    iterations++;
+    const task = queue.shift()!;
 
     report({
       phase: "planning",
       current: ready.length,
-      total: ready.length,
-      message: `Query plan complete: ${ready.length} queries`,
+      total: ready.length + queue.length,
+      message: `Building query plan... (${ready.length} queries)`,
     });
 
-    // Execute queries
-    const products = new Map<string, AlgoliaHit>();
-    let completed = 0;
-    let currentDelay = BASE_DELAY_MS;
+    const result = await algoliaQuery(apiKey, appId, storeNumber, {
+      ...(task.filter ? { filters: task.filter } : {}),
+      hitsPerPage: 0,
+      facets: ["*"],
+    });
 
-    const batches = chunk(ready, CONCURRENCY);
+    const count = result.nbHits;
 
-    for (const batch of batches) {
-      const results = await Promise.all(
-        batch.map(async (task) => {
-          const result = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
-            ...(task.filter ? { filters: task.filter } : {}),
-            hitsPerPage: MAX_HITS_PER_QUERY,
-          });
-          return { task, result };
-        })
-      );
+    if (count === 0) continue;
 
-      const rateLimited = results.filter((r) => r.result.status === 429);
-      if (rateLimited.length > 0) {
-        currentDelay = Math.min(currentDelay * 2, MAX_BACKOFF_MS);
-        await sleep(currentDelay);
+    if (count <= MAX_HITS_PER_QUERY) {
+      ready.push(task);
+      continue;
+    }
 
-        for (const { task } of rateLimited) {
-          const retryResult = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
-            ...(task.filter ? { filters: task.filter } : {}),
-            hitsPerPage: MAX_HITS_PER_QUERY,
-          });
+    const split = findBestSplit(result.facets ?? {}, count);
 
-          if (retryResult.success) {
-            for (const hit of retryResult.result.hits) {
-              const id = hit.productId ?? hit.productID ?? hit.objectID;
-              if (!products.has(id)) {
-                products.set(id, hit);
-              }
-            }
-          }
+    if (split) {
+      const coveredCount = split.values.reduce((sum, v) => sum + v.count, 0);
+      const uncoveredCount = count - coveredCount;
 
-          completed++;
-          await sleep(currentDelay);
-        }
-      } else {
-        currentDelay = BASE_DELAY_MS;
+      for (const { value } of split.values) {
+        const quotedValue = value.includes(" ") ? `"${value}"` : value;
+        const newFilter = task.filter
+          ? `${task.filter} AND ${split.attr}:${quotedValue}`
+          : `${split.attr}:${quotedValue}`;
+
+        queue.push({
+          name: `${split.attr}:${value}`,
+          filter: newFilter,
+        });
       }
 
-      for (const { result } of results) {
-        if (result.status === 429) continue;
+      if (uncoveredCount > 0) {
+        const notClauses = split.values
+          .map(({ value }) => {
+            const quotedValue = value.includes(" ") ? `"${value}"` : value;
+            return `NOT ${split.attr}:${quotedValue}`;
+          })
+          .join(" AND ");
 
-        if (result.success) {
-          for (const hit of result.result.hits) {
-            const id = hit.productId ?? hit.productID ?? hit.objectID;
-            if (!products.has(id)) {
-              products.set(id, hit);
-            }
-          }
-        }
-        completed++;
+        const remainderFilter = task.filter
+          ? `${task.filter} AND ${notClauses}`
+          : notClauses;
+
+        queue.push({
+          name: `NOT ${split.attr}`,
+          filter: remainderFilter,
+        });
       }
+    } else {
+      ready.push(task);
+    }
 
-      report({
-        phase: "fetching",
-        current: completed,
-        total: ready.length,
-        message: `Fetching products... ${completed}/${ready.length} (${products.size} products)`,
-      });
+    await sleep(PLANNING_DELAY_MS);
+  }
 
+  report({
+    phase: "planning",
+    current: ready.length,
+    total: ready.length,
+    message: `Query plan complete: ${ready.length} queries`,
+  });
+
+  // Execute queries — yield batches as they complete
+  let completed = 0;
+  let currentDelay = BASE_DELAY_MS;
+
+  const batches = chunk(ready, CONCURRENCY);
+
+  for (const batch of batches) {
+    const results = await Promise.all(
+      batch.map(async (task) => {
+        const result = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
+          ...(task.filter ? { filters: task.filter } : {}),
+          hitsPerPage: MAX_HITS_PER_QUERY,
+        });
+        return { task, result };
+      })
+    );
+
+    const batchHits: AlgoliaHit[] = [];
+
+    const rateLimited = results.filter((r) => r.result.status === 429);
+    if (rateLimited.length > 0) {
+      currentDelay = Math.min(currentDelay * 2, MAX_BACKOFF_MS);
       await sleep(currentDelay);
+
+      for (const { task } of rateLimited) {
+        const retryResult = await algoliaQueryWithStatus(apiKey, appId, storeNumber, {
+          ...(task.filter ? { filters: task.filter } : {}),
+          hitsPerPage: MAX_HITS_PER_QUERY,
+        });
+
+        if (retryResult.success) {
+          batchHits.push(...retryResult.result.hits);
+        }
+
+        completed++;
+        await sleep(currentDelay);
+      }
+    } else {
+      currentDelay = BASE_DELAY_MS;
     }
 
-    const coverage = (products.size / totalProducts) * 100;
+    for (const { result } of results) {
+      if (result.status === 429) continue;
 
-    return {
-      success: true,
-      products: Array.from(products.values()),
-      queryCount: ready.length,
-      totalProducts,
-      coverage,
-    };
-  } catch (err) {
-    const result: FetchResult = {
-      success: false,
-      products: [],
-      queryCount: 0,
-      totalProducts: 0,
-      coverage: 0,
-      error: err instanceof Error ? err.message : String(err),
-    };
-    if (err instanceof AlgoliaError) {
-      result.status = err.status;
+      if (result.success) {
+        batchHits.push(...result.result.hits);
+      }
+      completed++;
     }
-    return result;
+
+    if (batchHits.length > 0) {
+      yield batchHits;
+    }
+
+    report({
+      phase: "fetching",
+      current: completed,
+      total: ready.length,
+      message: `Fetching products... ${completed}/${ready.length}`,
+    });
+
+    await sleep(currentDelay);
   }
 }
