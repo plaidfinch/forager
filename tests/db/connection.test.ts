@@ -3,10 +3,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import DatabaseImpl from "better-sqlite3";
 import {
   openDatabases,
   openStoreDatabase,
@@ -16,6 +17,7 @@ import {
   getActiveStoreNumber,
   closeDatabases,
 } from "../../src/db/connection.js";
+import { initializeStoreDataSchema } from "../../src/db/schema.js";
 
 describe("Multi-Database Connection Management", () => {
   let testDir: string;
@@ -263,6 +265,99 @@ describe("Multi-Database Connection Management", () => {
       expect(() => {
         readonlyDb.exec(`INSERT INTO products (product_id, name) VALUES ('p1', 'Test')`);
       }).toThrow(/readonly/i);
+    });
+  });
+
+  describe("inode-based invalidation", () => {
+    beforeEach(() => {
+      openDatabases(testDir);
+    });
+
+    it("detects file swap and reopens connection", () => {
+      openStoreDatabase(testDir, "74");
+
+      // Write a marker into the original database
+      const { db: rwDb } = getStoreDataDb("74");
+      rwDb.exec(
+        `INSERT INTO products (product_id, name) VALUES ('marker', 'Original')`
+      );
+
+      // Create a replacement database with different content
+      const storePath = join(testDir, "stores", "74.db");
+      const tmpPath = storePath + ".tmp";
+      const tmpDb = new DatabaseImpl(tmpPath);
+      tmpDb.pragma("foreign_keys = ON");
+      initializeStoreDataSchema(tmpDb);
+      tmpDb.exec(
+        `INSERT INTO products (product_id, name) VALUES ('swapped', 'New')`
+      );
+      tmpDb.close();
+
+      // Atomically swap the file
+      renameSync(tmpPath, storePath);
+
+      // The next call should detect the inode change and reopen
+      const { readonlyDb } = getStoreDataDb("74");
+      const rows = readonlyDb
+        .prepare(`SELECT product_id FROM products`)
+        .all() as Array<{ product_id: string }>;
+      const ids = rows.map((r) => r.product_id);
+
+      expect(ids).not.toContain("marker");
+      expect(ids).toContain("swapped");
+    });
+
+    it("reuses connection when file has not changed", () => {
+      openStoreDatabase(testDir, "74");
+      const { readonlyDb: db1 } = getStoreDataDb("74");
+      const { readonlyDb: db2 } = getStoreDataDb("74");
+
+      // Same object reference — connection was reused, not reopened
+      expect(db2).toBe(db1);
+    });
+  });
+
+  describe("multi-store connection pool", () => {
+    beforeEach(() => {
+      openDatabases(testDir);
+    });
+
+    it("holds connections to multiple stores simultaneously", () => {
+      openStoreDatabase(testDir, "74");
+      openStoreDatabase(testDir, "101");
+
+      // Both should be accessible
+      const { readonlyDb: db74 } = getStoreDataDb("74");
+      const { readonlyDb: db101 } = getStoreDataDb("101");
+
+      expect(db74).toBeDefined();
+      expect(db101).toBeDefined();
+      expect(db74).not.toBe(db101);
+    });
+
+    it("getStoreDataDb opens store on demand if not in pool", () => {
+      // Don't call openStoreDatabase — getStoreDataDb should open it lazily
+      // But the file must exist on disk first
+      const storePath = join(testDir, "stores", "74.db");
+      const db = new DatabaseImpl(storePath);
+      db.pragma("foreign_keys = ON");
+      initializeStoreDataSchema(db);
+      db.exec(
+        `INSERT INTO products (product_id, name) VALUES ('p1', 'Test')`
+      );
+      db.close();
+
+      const { readonlyDb } = getStoreDataDb("74");
+      const rows = readonlyDb
+        .prepare(`SELECT product_id FROM products`)
+        .all() as Array<{ product_id: string }>;
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].product_id).toBe("p1");
+    });
+
+    it("getStoreDataDb throws if database file does not exist", () => {
+      expect(() => getStoreDataDb("999")).toThrow();
     });
   });
 });
