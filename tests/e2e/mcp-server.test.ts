@@ -91,7 +91,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(toolNames).toContain("setStore");
     });
 
-    it("query tool has correct schema with database parameter", async () => {
+    it("query tool has correct schema with database and storeNumber parameters", async () => {
       const result = await client.listTools();
 
       const queryTool = result.tools.find((t) => t.name === "query");
@@ -107,6 +107,10 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
           database: {
             type: "string",
             enum: ["stores", "products"],
+            description: expect.any(String),
+          },
+          storeNumber: {
+            type: "string",
             description: expect.any(String),
           },
         },
@@ -149,7 +153,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.rowCount).toBeGreaterThan(0);
     });
 
-    it("returns error when querying products without store selected", async () => {
+    it("returns error when querying products without storeNumber", async () => {
       const result = await client.callTool({
         name: "query",
         arguments: {
@@ -161,12 +165,11 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
       expect(response.success).toBe(false);
-      expect(response.error).toContain("No store selected");
-      expect(response.error).toContain("setStore");
+      expect(response.error).toContain("Missing required parameter: storeNumber");
     });
 
     it("defaults to products database when database parameter not specified", async () => {
-      // Without database parameter, should try products (and fail since no store selected)
+      // Without database parameter, should try products (and fail since no storeNumber)
       const result = await client.callTool({
         name: "query",
         arguments: { sql: "SELECT COUNT(*) as count FROM products" },
@@ -175,7 +178,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
       expect(response.success).toBe(false);
-      expect(response.error).toContain("No store selected");
+      expect(response.error).toContain("Missing required parameter: storeNumber");
     });
 
     it("returns error for invalid SQL on stores database", async () => {

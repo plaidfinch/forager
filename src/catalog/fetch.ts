@@ -277,12 +277,10 @@ export async function* fetchCatalog(
   // Get total count
   report({ phase: "planning", current: 0, total: 0, message: "Analyzing catalog structure..." });
 
-  const rootResult = await algoliaQuery(apiKey, appId, storeNumber, {
+  await algoliaQuery(apiKey, appId, storeNumber, {
     hitsPerPage: 0,
     facets: ["*"],
   });
-
-  const totalProducts = rootResult.nbHits;
 
   // Build query plan
   const queue: SplitTask[] = [{ name: "root", filter: null }];

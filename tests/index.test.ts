@@ -46,7 +46,7 @@ describe("MCP Server", () => {
       expect(TOOL_DEFINITIONS).toHaveLength(2);
     });
 
-    it("defines query tool with sql and database inputs", () => {
+    it("defines query tool with sql, database, and storeNumber inputs", () => {
       const queryToolDef = TOOL_DEFINITIONS.find((t) => t.name === "query");
 
       expect(queryToolDef).toBeDefined();
@@ -60,6 +60,10 @@ describe("MCP Server", () => {
           database: {
             type: "string",
             enum: ["stores", "products"],
+            description: expect.any(String),
+          },
+          storeNumber: {
+            type: "string",
             description: expect.any(String),
           },
         },
@@ -147,7 +151,7 @@ describe("Query Tool Handler", () => {
     it("queries store database when database='products'", () => {
       // Open a store database
       openStoreDatabase(testDir, "74");
-      const { db } = getStoreDataDb();
+      const { db } = getStoreDataDb("74");
 
       // Add a product
       db.exec(`
@@ -166,17 +170,17 @@ describe("Query Tool Handler", () => {
       });
     });
 
-    it("returns error when database='products' but no store selected", () => {
+    it("returns error when database='products' but no storeNumber provided", () => {
       // Don't open any store database - just have the base databases
       // The handler should detect this and return an error
 
       // This test validates the behavior we want:
-      // When querying products without a store selected, return a helpful error
-      const expectedError = "No store selected. Use setStore first to select a Wegmans store.";
+      // When querying products without a storeNumber, return a helpful error
+      const expectedError = "Missing required parameter: storeNumber. Query the stores database first to find the store number, then pass it here.";
 
       // The actual test of the handler will be in the integration
       // For now, just validate the error message format
-      expect(expectedError).toContain("setStore");
+      expect(expectedError).toContain("storeNumber");
     });
   });
 });
@@ -214,7 +218,7 @@ describe("Tool Definitions with Database Context", () => {
   it("includes products schema when store database is available", () => {
     openStoreDatabase(testDir, "74");
     const storesDb = getStoresDb();
-    const { readonlyDb: storeDataDb } = getStoreDataDb();
+    const { readonlyDb: storeDataDb } = getStoreDataDb("74");
 
     const tools = getToolDefinitions(storesDb, storeDataDb);
     const queryToolDef = tools.find((t) => t.name === "query");
@@ -225,12 +229,12 @@ describe("Tool Definitions with Database Context", () => {
     expect(queryToolDef?.description).toContain("nutrition_facts");
   });
 
-  it("shows 'use setStore first' message when no store database", () => {
+  it("shows 'use setStore' message when no store database", () => {
     const storesDb = getStoresDb();
 
     const tools = getToolDefinitions(storesDb, null);
     const queryToolDef = tools.find((t) => t.name === "query");
 
-    expect(queryToolDef?.description).toContain("setStore first");
+    expect(queryToolDef?.description).toContain("Use setStore to fetch");
   });
 });
