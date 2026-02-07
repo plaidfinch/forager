@@ -7,7 +7,8 @@
 import type Database from "better-sqlite3";
 import DatabaseImpl from "better-sqlite3";
 import { existsSync, renameSync, unlinkSync } from "node:fs";
-import { fetchCatalog, AlgoliaError, type FetchProgress, type AlgoliaHit } from "./fetch.js";
+import { join } from "node:path";
+import { fetchCatalog, fetchCatalogs, AlgoliaError, type FetchProgress, type AlgoliaHit } from "./fetch.js";
 import { populateOntology, getOntologyStats } from "./ontology.js";
 import { initializeStoreDataSchema } from "../db/schema.js";
 import {
@@ -116,7 +117,8 @@ export async function refreshCatalog(
   apiKey: string,
   appId: string,
   storeNumber: string,
-  onProgress?: (progress: FetchProgress) => void
+  onProgress?: (progress: FetchProgress) => void,
+  targetDurationMs?: number,
 ): Promise<RefreshResult> {
   try {
     const beforeStats = getOntologyStats(db);
@@ -156,7 +158,7 @@ export async function refreshCatalog(
       }
     });
 
-    for await (const batch of fetchCatalog(apiKey, appId, storeNumber, onProgress)) {
+    for await (const batch of fetchCatalog(apiKey, appId, storeNumber, onProgress, targetDurationMs)) {
       processBatch(batch);
     }
 
@@ -203,7 +205,8 @@ export async function refreshCatalogToFile(
   apiKey: string,
   appId: string,
   storeNumber: string,
-  onProgress?: (progress: FetchProgress) => void
+  onProgress?: (progress: FetchProgress) => void,
+  targetDurationMs?: number,
 ): Promise<RefreshResult> {
   const tmpPath = targetPath + ".tmp";
 
@@ -217,7 +220,7 @@ export async function refreshCatalogToFile(
   initializeStoreDataSchema(tmpDb);
 
   try {
-    const result = await refreshCatalog(tmpDb, apiKey, appId, storeNumber, onProgress);
+    const result = await refreshCatalog(tmpDb, apiKey, appId, storeNumber, onProgress, targetDurationMs);
     tmpDb.close();
 
     if (result.success) {
@@ -237,6 +240,178 @@ export async function refreshCatalogToFile(
 }
 
 /**
+ * Refresh catalogs for multiple stores into new database files,
+ * atomically swapping each into place as it completes.
+ *
+ * Uses a single global worker pool (fetchCatalogs) so all stores
+ * share the same connection budget. Temp DBs are opened lazily
+ * (on first batch) and closed eagerly (on done sentinel).
+ *
+ * @param storesDir - Directory containing per-store databases (e.g. /data/stores)
+ * @param apiKey - Algolia API key
+ * @param appId - Algolia application ID
+ * @param storeNumbers - Store numbers to refresh
+ * @param onProgress - Optional progress callback
+ * @param targetDurationMs - Target duration for pacing (undefined = fast)
+ * @returns Map of storeNumber → RefreshResult
+ */
+export async function refreshCatalogsToFile(
+  storesDir: string,
+  apiKey: string,
+  appId: string,
+  storeNumbers: string[],
+  onProgress?: (progress: FetchProgress) => void,
+  targetDurationMs?: number,
+): Promise<Map<string, RefreshResult>> {
+  interface StoreContext {
+    tmpDb: Database.Database;
+    tmpPath: string;
+    targetPath: string;
+    processBatch: (hits: AlgoliaHit[]) => void;
+    productsAdded: number;
+    now: string;
+  }
+
+  const contexts = new Map<string, StoreContext>();
+  const results = new Map<string, RefreshResult>();
+
+  function getOrCreateContext(storeNumber: string): StoreContext {
+    let ctx = contexts.get(storeNumber);
+    if (ctx) return ctx;
+
+    const targetPath = join(storesDir, `${storeNumber}.db`);
+    const tmpPath = targetPath + ".tmp";
+
+    if (existsSync(tmpPath)) unlinkSync(tmpPath);
+
+    const tmpDb = new DatabaseImpl(tmpPath);
+    tmpDb.pragma("foreign_keys = ON");
+    initializeStoreDataSchema(tmpDb);
+
+    // Clear derived tables for fresh counts
+    tmpDb.exec("DELETE FROM categories");
+    tmpDb.exec("DELETE FROM tags");
+    tmpDb.exec("DELETE FROM product_tags");
+
+    const now = new Date().toISOString();
+
+    const processBatch = tmpDb.transaction((hits: AlgoliaHit[]) => {
+      populateOntology(tmpDb, hits);
+
+      for (const hit of hits) {
+        const product = {
+          ...transformHitToProduct(hit),
+          lastUpdated: now,
+        };
+        const serving = transformHitToServing(hit);
+        const nutritionFacts = transformHitToNutritionFacts(hit);
+
+        upsertProduct(tmpDb, product);
+        upsertProductTags(tmpDb, product.productId, product.tagsFilter, product.tagsPopular);
+
+        if (serving) upsertServing(tmpDb, serving);
+        if (nutritionFacts.length > 0) upsertNutritionFacts(tmpDb, nutritionFacts);
+
+        ctx!.productsAdded++;
+      }
+    });
+
+    ctx = { tmpDb, tmpPath, targetPath, processBatch, productsAdded: 0, now };
+    contexts.set(storeNumber, ctx);
+    return ctx;
+  }
+
+  function finalizeStore(storeNumber: string): void {
+    const ctx = contexts.get(storeNumber);
+    if (!ctx) {
+      // No batches received — store had zero products
+      results.set(storeNumber, {
+        success: true,
+        productsAdded: 0,
+        categoriesAdded: 0,
+        tagsAdded: 0,
+      });
+      return;
+    }
+
+    try {
+      const stats = getOntologyStats(ctx.tmpDb);
+      ctx.tmpDb.close();
+      renameSync(ctx.tmpPath, ctx.targetPath);
+
+      results.set(storeNumber, {
+        success: true,
+        productsAdded: ctx.productsAdded,
+        categoriesAdded: stats.categoryCount,
+        tagsAdded: stats.tagCount,
+      });
+    } catch (err) {
+      try { ctx.tmpDb.close(); } catch { /* ignore */ }
+      if (existsSync(ctx.tmpPath)) {
+        try { unlinkSync(ctx.tmpPath); } catch { /* ignore */ }
+      }
+      results.set(storeNumber, {
+        success: false,
+        productsAdded: 0,
+        categoriesAdded: 0,
+        tagsAdded: 0,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      contexts.delete(storeNumber);
+    }
+  }
+
+  try {
+    for await (const batch of fetchCatalogs(apiKey, appId, storeNumbers, { onProgress, targetDurationMs })) {
+      if ("done" in batch) {
+        finalizeStore(batch.storeNumber);
+      } else {
+        const ctx = getOrCreateContext(batch.storeNumber);
+        ctx.processBatch(batch.hits);
+      }
+    }
+  } catch (err) {
+    // Clean up all open temp DBs
+    for (const [storeNumber, ctx] of contexts) {
+      try { ctx.tmpDb.close(); } catch { /* ignore */ }
+      if (existsSync(ctx.tmpPath)) {
+        try { unlinkSync(ctx.tmpPath); } catch { /* ignore */ }
+      }
+      if (!results.has(storeNumber)) {
+        const result: RefreshResult = {
+          success: false,
+          productsAdded: 0,
+          categoriesAdded: 0,
+          tagsAdded: 0,
+          error: err instanceof Error ? err.message : String(err),
+        };
+        if (err instanceof AlgoliaError) result.status = err.status;
+        results.set(storeNumber, result);
+      }
+    }
+    contexts.clear();
+
+    // Fill in results for stores that never got any batches
+    for (const sn of storeNumbers) {
+      if (!results.has(sn)) {
+        const result: RefreshResult = {
+          success: false,
+          productsAdded: 0,
+          categoriesAdded: 0,
+          tagsAdded: 0,
+          error: err instanceof Error ? err.message : String(err),
+        };
+        if (err instanceof AlgoliaError) result.status = err.status;
+        results.set(sn, result);
+      }
+    }
+  }
+
+  return results;
+}
+
+/**
  * Check catalog status and refresh if empty or stale.
  *
  * @param db - Database connection
@@ -251,7 +426,8 @@ export async function refreshCatalogIfNeeded(
   apiKey: string,
   appId: string,
   storeNumber: string,
-  onProgress?: (progress: FetchProgress) => void
+  onProgress?: (progress: FetchProgress) => void,
+  targetDurationMs?: number,
 ): Promise<RefreshResult | null> {
   const status = getCatalogStatus(db);
 
@@ -259,5 +435,5 @@ export async function refreshCatalogIfNeeded(
     return null; // No refresh needed
   }
 
-  return refreshCatalog(db, apiKey, appId, storeNumber, onProgress);
+  return refreshCatalog(db, apiKey, appId, storeNumber, onProgress, targetDurationMs);
 }

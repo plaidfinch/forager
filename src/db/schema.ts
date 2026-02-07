@@ -5,49 +5,21 @@
  * - settings.db: API keys and global settings
  * - stores.db: Store locations from Wegmans API
  * - stores/{storeNumber}.db: Per-store product data
+ *
+ * DDL constants are the single source of truth — used by both
+ * runtime init functions and the static tool description.
  */
 
 import type Database from "better-sqlite3";
 
-/**
- * Initialize schema for settings.db - API keys and global settings.
- * Safe to call multiple times (idempotent).
- */
-export function initializeSettingsSchema(db: Database.Database): void {
-  // Enable foreign keys
-  db.pragma("foreign_keys = ON");
+// --- Stores DDL (stores.db) ---
 
-  // API keys for Algolia access
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      key TEXT NOT NULL,
-      app_id TEXT NOT NULL,
-      extracted_at TEXT NOT NULL,
-      expires_at TEXT
-    )
-  `);
-
-  // Settings/metadata (key-value store)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
+export const STORES_DDL = {
+  settings: `CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
-    )
-  `);
-}
-
-/**
- * Initialize schema for stores.db - Store locations from Wegmans API.
- * Safe to call multiple times (idempotent).
- */
-export function initializeStoresSchema(db: Database.Database): void {
-  // Enable foreign keys
-  db.pragma("foreign_keys = ON");
-
-  // Stores table
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS stores (
+    )`,
+  stores: `CREATE TABLE IF NOT EXISTS stores (
       store_number TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       city TEXT,
@@ -66,31 +38,13 @@ export function initializeStoresSchema(db: Database.Database): void {
       opening_date TEXT,
       zones TEXT,
       last_updated TEXT
-    )
-  `);
+    )`,
+};
 
-  // Settings/metadata (key-value store for stores_last_updated, etc.)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
-}
+// --- Store data DDL (stores/{N}.db) ---
 
-/**
- * Initialize schema for per-store database (stores/NNN.db) - Product data for a single store.
- * Merges products and store_products tables since each store has its own database.
- * Safe to call multiple times (idempotent).
- */
-export function initializeStoreDataSchema(db: Database.Database): void {
-  // Enable foreign keys
-  db.pragma("foreign_keys = ON");
-
-  // Merged products table (combines products + store_products fields)
-  // No store_number needed since each store has its own database
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS products (
+export const STORE_DATA_DDL = {
+  products: `CREATE TABLE IF NOT EXISTS products (
       product_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       brand TEXT,
@@ -115,24 +69,16 @@ export function initializeStoreDataSchema(db: Database.Database): void {
       is_available INTEGER,
       is_sold_at_store INTEGER,
       last_updated TEXT
-    )
-  `);
-
-  // Serving information (one per product)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS servings (
+    )`,
+  servings: `CREATE TABLE IF NOT EXISTS servings (
       product_id TEXT PRIMARY KEY,
       serving_size TEXT,
       serving_size_unit TEXT,
       servings_per_container TEXT,
       household_measurement TEXT,
       FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
-    )
-  `);
-
-  // Nutrition facts (multiple per product)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS nutrition_facts (
+    )`,
+  nutrition_facts: `CREATE TABLE IF NOT EXISTS nutrition_facts (
       product_id TEXT NOT NULL,
       nutrient TEXT NOT NULL,
       quantity REAL,
@@ -141,28 +87,87 @@ export function initializeStoreDataSchema(db: Database.Database): void {
       category TEXT NOT NULL CHECK (category IN ('general', 'vitamin')),
       PRIMARY KEY (product_id, nutrient),
       FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
-    )
-  `);
-
-  // Categories ontology (for reference/browsing)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS categories (
+    )`,
+  categories: `CREATE TABLE IF NOT EXISTS categories (
       path TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       level INTEGER NOT NULL,
       product_count INTEGER
-    )
-  `);
-
-  // Tags ontology (for reference/filtering)
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS tags (
+    )`,
+  tags: `CREATE TABLE IF NOT EXISTS tags (
       name TEXT NOT NULL,
       type TEXT NOT NULL,
       product_count INTEGER,
       PRIMARY KEY (name, type)
-    )
-  `);
+    )`,
+  product_tags: `CREATE TABLE IF NOT EXISTS product_tags (
+      product_id TEXT NOT NULL,
+      tag_name TEXT NOT NULL,
+      tag_type TEXT NOT NULL CHECK (tag_type IN ('filter', 'popular')),
+      PRIMARY KEY (product_id, tag_name, tag_type),
+      FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
+    )`,
+};
+
+// --- Formatted DDL for tool descriptions ---
+
+export const STORES_SCHEMA_DDL = Object.values(STORES_DDL)
+  .map((ddl) => ddl + ";")
+  .join("\n");
+
+export const STORE_DATA_SCHEMA_DDL = Object.values(STORE_DATA_DDL)
+  .map((ddl) => ddl + ";")
+  .join("\n");
+
+// --- Settings DDL (settings.db) ---
+
+const SETTINGS_DDL = {
+  api_keys: `CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      extracted_at TEXT NOT NULL,
+      expires_at TEXT
+    )`,
+  settings: `CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`,
+};
+
+/**
+ * Initialize schema for settings.db - API keys and global settings.
+ * Safe to call multiple times (idempotent).
+ */
+export function initializeSettingsSchema(db: Database.Database): void {
+  db.pragma("foreign_keys = ON");
+  db.exec(SETTINGS_DDL.api_keys);
+  db.exec(SETTINGS_DDL.settings);
+}
+
+/**
+ * Initialize schema for stores.db - Store locations from Wegmans API.
+ * Safe to call multiple times (idempotent).
+ */
+export function initializeStoresSchema(db: Database.Database): void {
+  db.pragma("foreign_keys = ON");
+  db.exec(STORES_DDL.stores);
+  db.exec(STORES_DDL.settings);
+}
+
+/**
+ * Initialize schema for per-store database (stores/NNN.db) - Product data for a single store.
+ * Merges products and store_products tables since each store has its own database.
+ * Safe to call multiple times (idempotent).
+ */
+export function initializeStoreDataSchema(db: Database.Database): void {
+  db.pragma("foreign_keys = ON");
+
+  db.exec(STORE_DATA_DDL.products);
+  db.exec(STORE_DATA_DDL.servings);
+  db.exec(STORE_DATA_DDL.nutrition_facts);
+  db.exec(STORE_DATA_DDL.categories);
+  db.exec(STORE_DATA_DDL.tags);
 
   // Materialized junction table for product tags (replaces json_each view).
   // Drop the legacy view if migrating from an older schema.
@@ -172,15 +177,7 @@ export function initializeStoreDataSchema(db: Database.Database): void {
   if (productTagsType?.type === "view") {
     db.exec(`DROP VIEW product_tags`);
   }
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS product_tags (
-      product_id TEXT NOT NULL,
-      tag_name TEXT NOT NULL,
-      tag_type TEXT NOT NULL CHECK (tag_type IN ('filter', 'popular')),
-      PRIMARY KEY (product_id, tag_name, tag_type),
-      FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
-    )
-  `);
+  db.exec(STORE_DATA_DDL.product_tags);
 
   // View for category lookups
   db.exec(`

@@ -32,6 +32,8 @@ interface CachedStoreConnection {
 interface ConnectionState {
   settings: Database.Database;
   stores: Database.Database;
+  storesPath: string;
+  storesIno: number;
   dataDir: string;
   storePool: Map<string, CachedStoreConnection>;
 }
@@ -73,6 +75,16 @@ export function openDatabases(dataDir: string): void {
     }
   }
 
+  // Clean up leftover stores.db.tmp in the dataDir itself
+  const storesDbTmpPath = join(dataDir, "stores.db.tmp");
+  if (existsSync(storesDbTmpPath)) {
+    try {
+      unlinkSync(storesDbTmpPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+
   const settingsPath = join(dataDir, "settings.db");
   const settings = new Database(settingsPath);
   settings.pragma("foreign_keys = ON");
@@ -82,10 +94,13 @@ export function openDatabases(dataDir: string): void {
   const stores = new Database(storesPath);
   stores.pragma("foreign_keys = ON");
   initializeStoresSchema(stores);
+  const storesIno = statSync(storesPath).ino;
 
   state = {
     settings,
     stores,
+    storesPath,
+    storesIno,
     dataDir,
     storePool: new Map(),
   };
@@ -130,6 +145,10 @@ export function getSettingsDb(): Database.Database {
 
 /**
  * Get the stores database connection.
+ *
+ * Checks the file inode on every call. If the file has been
+ * atomically swapped (different inode), the old connection is
+ * closed and a fresh one opened transparently.
  */
 export function getStoresDb(): Database.Database {
   if (state === null) {
@@ -137,6 +156,18 @@ export function getStoresDb(): Database.Database {
       "Databases not initialized. Call openDatabases() first."
     );
   }
+
+  const currentIno = statSync(state.storesPath).ino;
+  if (currentIno !== state.storesIno) {
+    // Inode changed — close old connection and reopen
+    state.stores.close();
+    const newDb = new Database(state.storesPath);
+    newDb.pragma("foreign_keys = ON");
+    initializeStoresSchema(newDb);
+    state.stores = newDb;
+    state.storesIno = currentIno;
+  }
+
   return state.stores;
 }
 

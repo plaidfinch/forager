@@ -17,7 +17,7 @@ import {
   closeDatabases,
   setPoolTtlMs,
 } from "../../src/db/connection.js";
-import { initializeStoreDataSchema } from "../../src/db/schema.js";
+import { initializeStoreDataSchema, initializeStoresSchema } from "../../src/db/schema.js";
 
 describe("Multi-Database Connection Management", () => {
   let testDir: string;
@@ -122,6 +122,26 @@ describe("Multi-Database Connection Management", () => {
       openDatabases(testDir);
 
       expect(existsSync(dbPath)).toBe(true);
+    });
+
+    it("cleans up leftover stores.db.tmp file on startup", () => {
+      // Create stores.db.tmp in the data dir (not in stores/ subdir)
+      const tmpPath = join(testDir, "stores.db.tmp");
+      const tmpDb = new DatabaseImpl(tmpPath);
+      tmpDb.close();
+      expect(existsSync(tmpPath)).toBe(true);
+
+      // Need to close current databases first if open, then reopen
+      // Actually for this test, create the tmp file BEFORE openDatabases
+      closeDatabases(); // close from beforeEach
+
+      // Re-create the tmp file
+      const tmpDb2 = new DatabaseImpl(tmpPath);
+      tmpDb2.close();
+      expect(existsSync(tmpPath)).toBe(true);
+
+      openDatabases(testDir);
+      expect(existsSync(tmpPath)).toBe(false);
     });
   });
 
@@ -324,6 +344,44 @@ describe("Multi-Database Connection Management", () => {
       const { readonlyDb: db2 } = getStoreDataDb("74");
 
       // Same object reference — connection was reused, not reopened
+      expect(db2).toBe(db1);
+    });
+  });
+
+  describe("stores.db inode invalidation", () => {
+    beforeEach(() => {
+      openDatabases(testDir);
+    });
+
+    it("detects stores.db file swap and reopens connection", () => {
+      // 1. Insert a store into the original stores.db
+      const storesDb = getStoresDb();
+      storesDb.exec(`INSERT INTO stores (store_number, name) VALUES ('99', 'Original')`);
+
+      // 2. Create a replacement stores.db with different content
+      const storesPath = join(testDir, "stores.db");
+      const tmpPath = storesPath + ".tmp";
+      const tmpDb = new DatabaseImpl(tmpPath);
+      tmpDb.pragma("foreign_keys = ON");
+      initializeStoresSchema(tmpDb);
+      tmpDb.exec(`INSERT INTO stores (store_number, name) VALUES ('88', 'Swapped')`);
+      tmpDb.close();
+
+      // 3. Atomically swap
+      renameSync(tmpPath, storesPath);
+
+      // 4. getStoresDb() should detect inode change and return new data
+      const newDb = getStoresDb();
+      const rows = newDb.prepare(`SELECT store_number FROM stores`).all() as Array<{ store_number: string }>;
+      const numbers = rows.map(r => r.store_number);
+
+      expect(numbers).not.toContain("99");
+      expect(numbers).toContain("88");
+    });
+
+    it("reuses stores connection when file has not changed", () => {
+      const db1 = getStoresDb();
+      const db2 = getStoresDb();
       expect(db2).toBe(db1);
     });
   });

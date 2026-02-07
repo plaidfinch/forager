@@ -9,6 +9,8 @@ import {
   initializeSettingsSchema,
   initializeStoresSchema,
   initializeStoreDataSchema,
+  STORES_DDL,
+  STORE_DATA_DDL,
 } from "../../src/db/schema.js";
 
 describe("initializeSettingsSchema", () => {
@@ -471,3 +473,54 @@ describe("initializeStoreDataSchema", () => {
     expect(tables.length).toBe(6);
   });
 });
+
+describe("DDL constants match runtime schema", () => {
+  it("STORES_DDL matches sqlite_master after initializeStoresSchema", () => {
+    const db = new Database(":memory:");
+    try {
+      initializeStoresSchema(db);
+
+      const rows = db
+        .prepare(
+          `SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+        )
+        .all() as Array<{ name: string; sql: string }>;
+
+      const runtimeDdl = Object.fromEntries(rows.map((r) => [r.name, r.sql]));
+
+      for (const [name, ddl] of Object.entries(STORES_DDL)) {
+        expect(runtimeDdl[name]).toBeDefined();
+        expect(normalize(runtimeDdl[name]!)).toBe(normalize(ddl));
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("STORE_DATA_DDL matches sqlite_master after initializeStoreDataSchema", () => {
+    const db = new Database(":memory:");
+    try {
+      initializeStoreDataSchema(db);
+
+      const rows = db
+        .prepare(
+          `SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
+        )
+        .all() as Array<{ name: string; sql: string }>;
+
+      const runtimeDdl = Object.fromEntries(rows.map((r) => [r.name, r.sql]));
+
+      for (const [name, ddl] of Object.entries(STORE_DATA_DDL)) {
+        expect(runtimeDdl[name]).toBeDefined();
+        expect(normalize(runtimeDdl[name]!)).toBe(normalize(ddl));
+      }
+    } finally {
+      db.close();
+    }
+  });
+});
+
+/** Normalize whitespace and strip IF NOT EXISTS for comparison with sqlite_master output. */
+function normalize(sql: string): string {
+  return sql.replace(/\s+/g, " ").replace(/IF NOT EXISTS /gi, "").trim();
+}

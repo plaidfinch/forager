@@ -4,7 +4,10 @@
  * Fetches the Wegmans store list from their API and caches in the database.
  */
 
+import DatabaseImpl from "better-sqlite3";
 import type Database from "better-sqlite3";
+import { existsSync, renameSync, unlinkSync } from "node:fs";
+import { initializeStoresSchema } from "../db/schema.js";
 
 const STORES_API_URL = "https://www.wegmans.com/api/stores";
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -271,6 +274,64 @@ export async function getStores(
       };
     }
     // No cache and fetch failed
+    throw err;
+  }
+}
+
+/**
+ * Atomically refresh the stores database file.
+ *
+ * Writes to a .tmp file, then renames over the target path so that
+ * inode-based invalidation in getStoresDb() picks up the new file.
+ *
+ * @param targetPath - Path to the stores.db file
+ * @param fetchFn - Optional function to fetch stores (defaults to fetchStoresFromApi)
+ * @returns The fetched stores
+ */
+export async function refreshStoresToFile(
+  targetPath: string,
+  fetchFn?: () => Promise<StoreInfo[]>,
+): Promise<StoreInfo[]> {
+  const tmpPath = targetPath + ".tmp";
+
+  // Clean up leftover tmp if exists
+  if (existsSync(tmpPath)) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+
+  let tmpDb: Database.Database | null = null;
+  try {
+    tmpDb = new DatabaseImpl(tmpPath);
+    tmpDb.pragma("foreign_keys = ON");
+    initializeStoresSchema(tmpDb);
+
+    const stores = await (fetchFn ?? fetchStoresFromApi)();
+    saveStoresToCache(tmpDb, stores);
+
+    tmpDb.close();
+    tmpDb = null;
+
+    renameSync(tmpPath, targetPath);
+    return stores;
+  } catch (err) {
+    if (tmpDb) {
+      try {
+        tmpDb.close();
+      } catch {
+        // Ignore close errors
+      }
+    }
+    if (existsSync(tmpPath)) {
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
     throw err;
   }
 }

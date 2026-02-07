@@ -81,14 +81,13 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
   });
 
   describe("tools/list", () => {
-    it("returns all 2 tools", async () => {
+    it("returns 1 tool", async () => {
       const result = await client.listTools();
 
-      expect(result.tools).toHaveLength(2);
+      expect(result.tools).toHaveLength(1);
 
       const toolNames = result.tools.map((t) => t.name);
       expect(toolNames).toContain("query");
-      expect(toolNames).toContain("setStore");
     });
 
     it("query tool has correct schema with storeNumber parameter", async () => {
@@ -110,22 +109,6 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
           },
         },
         required: ["sql"],
-      });
-    });
-
-    it("setStore tool has correct schema", async () => {
-      const result = await client.listTools();
-
-      const setStoreTool = result.tools.find((t) => t.name === "setStore");
-      expect(setStoreTool).toBeDefined();
-      expect(setStoreTool?.description).toContain("Set the active Wegmans store and fetch its product catalog");
-      expect(setStoreTool?.inputSchema).toEqual({
-        type: "object",
-        properties: {
-          storeNumber: { type: "string", description: expect.any(String) },
-          forceRefresh: { type: "boolean", description: expect.any(String) },
-        },
-        required: ["storeNumber"],
       });
     });
   });
@@ -188,20 +171,6 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
 
       expect(response.success).toBe(false);
       expect(response.error).toBeDefined();
-    });
-  });
-
-  describe("setStore tool", () => {
-    it("validates required parameters", async () => {
-      const result = await client.callTool({
-        name: "setStore",
-        arguments: {}, // Missing storeNumber
-      });
-
-      const response = JSON.parse((result.content[0] as { text: string }).text);
-
-      expect(response.success).toBe(false);
-      expect(response.error).toContain("Missing required parameter");
     });
   });
 

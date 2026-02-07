@@ -14,7 +14,6 @@ import {
   createServer,
   TOOL_DEFINITIONS,
   getDataDir,
-  getToolDefinitions,
 } from "../src/index.js";
 import {
   openDatabases,
@@ -42,8 +41,8 @@ describe("MCP Server", () => {
   });
 
   describe("TOOL_DEFINITIONS", () => {
-    it("defines 2 tools", () => {
-      expect(TOOL_DEFINITIONS).toHaveLength(2);
+    it("defines 1 tool", () => {
+      expect(TOOL_DEFINITIONS).toHaveLength(1);
     });
 
     it("defines query tool with sql and storeNumber inputs", () => {
@@ -67,10 +66,27 @@ describe("MCP Server", () => {
       expect(queryToolDef?.inputSchema.properties).not.toHaveProperty("database");
     });
 
-    it("defines setStore tool", () => {
-      const setStoreToolDef = TOOL_DEFINITIONS.find((t) => t.name === "setStore");
-      expect(setStoreToolDef).toBeDefined();
-      expect(setStoreToolDef?.description).toContain("Set the active Wegmans store and fetch its product catalog");
+    it("includes stores schema DDL in description", () => {
+      const queryToolDef = TOOL_DEFINITIONS.find((t) => t.name === "query");
+      const desc = queryToolDef!.description;
+
+      expect(desc).toContain("STORES SCHEMA");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS settings");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS stores");
+      expect(desc).toContain("store_number TEXT PRIMARY KEY");
+    });
+
+    it("includes products schema DDL in description", () => {
+      const queryToolDef = TOOL_DEFINITIONS.find((t) => t.name === "query");
+      const desc = queryToolDef!.description;
+
+      expect(desc).toContain("PRODUCTS SCHEMA");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS products");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS servings");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS nutrition_facts");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS categories");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS tags");
+      expect(desc).toContain("CREATE TABLE IF NOT EXISTS product_tags");
     });
   });
 });
@@ -163,56 +179,3 @@ describe("Query Tool Handler", () => {
   });
 });
 
-describe("Tool Definitions with Database Context", () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `wegmans-test-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-    openDatabases(testDir);
-  });
-
-  afterEach(() => {
-    try {
-      closeDatabases();
-    } catch {
-      // Ignore if already closed
-    }
-    if (existsSync(testDir)) {
-      rmSync(testDir, { recursive: true, force: true });
-    }
-  });
-
-  it("includes stores schema in query tool description", () => {
-    const storesDb = getStoresDb();
-
-    const tools = getToolDefinitions(storesDb, null);
-    const queryToolDef = tools.find((t) => t.name === "query");
-
-    expect(queryToolDef?.description).toContain("STORES SCHEMA");
-    expect(queryToolDef?.description).toContain("stores");
-  });
-
-  it("includes products schema when store database is available", () => {
-    openStoreDatabase(testDir, "74");
-    const storesDb = getStoresDb();
-    const { readonlyDb: storeDataDb } = getStoreDataDb("74");
-
-    const tools = getToolDefinitions(storesDb, storeDataDb);
-    const queryToolDef = tools.find((t) => t.name === "query");
-
-    expect(queryToolDef?.description).toContain("PRODUCTS SCHEMA");
-    expect(queryToolDef?.description).toContain("products");
-    expect(queryToolDef?.description).toContain("servings");
-    expect(queryToolDef?.description).toContain("nutrition_facts");
-  });
-
-  it("shows 'use setStore' message when no store database", () => {
-    const storesDb = getStoresDb();
-
-    const tools = getToolDefinitions(storesDb, null);
-    const queryToolDef = tools.find((t) => t.name === "query");
-
-    expect(queryToolDef?.description).toContain("Use setStore to fetch a store");
-  });
-});

@@ -2,14 +2,16 @@
 /**
  * MCP Server Entry Point for Wegmans Product Data.
  *
- * Provides 2 tools for interacting with Wegmans product data:
- * - setStore: Select a store and fetch its catalog
+ * Provides 1 tool for interacting with Wegmans product data:
  * - query: Execute read-only SQL queries (schema is embedded in tool description)
+ *
+ * Store catalogs are auto-loaded on first query and background-refreshed
+ * when stale. No setStore step required.
  *
  * Multi-database architecture:
  * - settings.db: API keys and global settings
- * - stores.db: Store locations (always available for queries)
- * - stores/{storeNumber}.db: Per-store product data
+ * - stores.db: Store locations (auto-fetched)
+ * - stores/{storeNumber}.db: Per-store product data (auto-loaded on query)
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -18,10 +20,9 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import type Database from "better-sqlite3";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -32,10 +33,16 @@ import {
   getStoreDataDb,
 } from "./db/connection.js";
 import { queryTool } from "./tools/query.js";
-import { schemaTool, type SchemaToolResultExtended } from "./tools/schema.js";
-import { setStoreTool } from "./tools/setStore.js";
-import type { FetchProgress } from "./catalog/index.js";
-import { getStores } from "./stores/fetch.js";
+import { STORES_SCHEMA_DDL, STORE_DATA_SCHEMA_DDL } from "./db/schema.js";
+import { ensureCatalog } from "./catalog/ensure.js";
+import { getCatalogStatus, refreshCatalogToFile, refreshCatalogsToFile } from "./catalog/index.js";
+import { ensureApiCredentials } from "./algolia/credentials.js";
+import {
+  getStoresFromCache,
+  isStoresCacheStale,
+  refreshStoresToFile,
+} from "./stores/fetch.js";
+import { startScheduler, stopScheduler, countStoreDbs } from "./scheduler.js";
 
 /**
  * Get the data directory for storing databases.
@@ -50,120 +57,56 @@ export function getDataDir(): string {
 }
 
 /**
- * Format schema result as a string for embedding in tool description.
+ * Static tool definitions with schema embedded from DDL constants.
  */
-function formatSchemaForDescription(schemaResult: SchemaToolResultExtended): string {
-  if (!schemaResult.success || !schemaResult.tables) {
-    return "Schema not available - use setStore first to initialize the database.";
-  }
-
-  const parts: string[] = [];
-
-  // Add tables
-  if (schemaResult.tables && schemaResult.tables.length > 0) {
-    for (const table of schemaResult.tables) {
-      parts.push(table.ddl + ";");
-    }
-  }
-
-  // Add views
-  if (schemaResult.views && schemaResult.views.length > 0) {
-    parts.push("\n-- Views:");
-    for (const view of schemaResult.views) {
-      parts.push(view.ddl + ";");
-    }
-  }
-
-  return parts.join("\n");
-}
-
-/**
- * Generate tool definitions with the current database schema embedded.
- *
- * @param storesDb - Stores database connection (for stores schema)
- * @param storeDataDb - Store data database connection (for products schema), or null if no store selected
- * @returns Array of tool definitions
- */
-export function getToolDefinitions(storesDb?: Database.Database, storeDataDb?: Database.Database | null) {
-  // Get stores schema (always available)
-  let storesSchemaText = "Stores database not initialized.";
-  if (storesDb) {
-    const storesSchemaResult = schemaTool(storesDb);
-    storesSchemaText = formatSchemaForDescription(storesSchemaResult);
-  }
-
-  // Get products schema (only if store is selected)
-  let productsSchemaText = "No store catalog loaded yet. Use setStore to fetch a store's catalog first.";
-  if (storeDataDb) {
-    const productsSchemaResult = schemaTool(storeDataDb);
-    productsSchemaText = formatSchemaForDescription(productsSchemaResult);
-  }
-
-  return [
-    {
-      name: "query",
-      description: `Execute a read-only SQL query. Use the 'storeNumber' parameter to choose which database to query:
+export const TOOL_DEFINITIONS = [
+  {
+    name: "query",
+    description: `Execute a read-only SQL query. Use the 'storeNumber' parameter to choose which database to query:
 - Omit storeNumber: Query runs against the store locations table (find store numbers, cities, etc.)
-- Provide storeNumber: Query runs against that store's product catalog
+- Provide storeNumber: Query runs against that store's product catalog (auto-loads on first use)
 
 STORES SCHEMA (when storeNumber is omitted):
-${storesSchemaText}
+${STORES_SCHEMA_DDL}
 
 PRODUCTS SCHEMA (when storeNumber is provided):
-${productsSchemaText}`,
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          sql: {
-            type: "string",
-            description: "The SQL SELECT statement to execute",
-          },
-          storeNumber: {
-            type: "string",
-            description:
-              "Wegmans store number. When provided, the query runs against that store's product catalog. When omitted, the query runs against the stores table. Query the stores table first to find store numbers by city, state, or zip code.",
-          },
+${STORE_DATA_SCHEMA_DDL}`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        sql: {
+          type: "string",
+          description: "The SQL SELECT statement to execute",
         },
-        required: ["sql"],
-      },
-      annotations: {
-        readOnlyHint: true,
-      },
-    },
-    {
-      name: "setStore",
-      description:
-        "Set the active Wegmans store and fetch its product catalog. Fetches full catalog (~29,000 products) on first use for a store. IMPORTANT: Before calling this tool, ask the user which Wegmans store they want to use (by city, state, or zip code), then use the query tool (without storeNumber) to find the matching store number.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          storeNumber: {
-            type: "string",
-            description:
-              "Wegmans store number. Query the stores table to find store numbers by city, state, or zip code.",
-          },
-          forceRefresh: {
-            type: "boolean",
-            description:
-              "Force a full catalog refresh even if data exists (default: false)",
-          },
+        storeNumber: {
+          type: "string",
+          description:
+            "Wegmans store number. When provided, the query runs against that store's product catalog. When omitted, the query runs against the stores table. Query the stores table first to find store numbers by city, state, or zip code.",
         },
-        required: ["storeNumber"],
       },
-      annotations: {
-        idempotentHint: true,
-      },
+      required: ["sql"],
     },
-  ];
-}
-
-/**
- * Static tool definitions for testing (without database).
- */
-export const TOOL_DEFINITIONS = getToolDefinitions();
+    annotations: {
+      readOnlyHint: true,
+    },
+  },
+];
 
 // Module-level data directory for use by tool handlers
 let dataDir: string = "";
+
+// --- Background refresh infrastructure ---
+
+const refreshesInProgress = new Set<string>();
+const STORES_KEY = "__stores__";
+
+export function triggerBackgroundRefresh(key: string, fn: () => Promise<void>): void {
+  if (refreshesInProgress.has(key)) return;
+  refreshesInProgress.add(key);
+  fn()
+    .catch(err => log(`Background refresh ${key} failed: ${err instanceof Error ? err.message : err}`))
+    .finally(() => refreshesInProgress.delete(key));
+}
 
 /**
  * Create and configure the MCP server with tool handlers.
@@ -181,34 +124,9 @@ export function createServer(): Server {
     }
   );
 
-  // Register tool listing handler - dynamically generates schema in query tool description
+  // Register tool listing handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    try {
-      const storesDb = getStoresDb();
-
-      let storeDataDb: Database.Database | null = null;
-      const storesDir = join(dataDir, "stores");
-      if (existsSync(storesDir)) {
-        const files = readdirSync(storesDir).filter(
-          (f) => f.endsWith(".db") && !f.endsWith(".tmp")
-        );
-        const firstFile = files[0];
-        if (firstFile) {
-          const sampleStore = firstFile.replace(".db", "");
-          try {
-            const { readonlyDb } = getStoreDataDb(sampleStore);
-            storeDataDb = readonlyDb;
-          } catch {
-            // Ignore — schema not available
-          }
-        }
-      }
-
-      return { tools: getToolDefinitions(storesDb, storeDataDb) };
-    } catch {
-      // Databases not initialized yet
-      return { tools: getToolDefinitions() };
-    }
+    return { tools: TOOL_DEFINITIONS };
   });
 
   // Register tool call handler
@@ -233,13 +151,68 @@ export function createServer(): Server {
 
           if (!storeNumber) {
             // No store specified — query the stores table
+
+            // Ensure stores are loaded
             const storesDb = getStoresDb();
-            const result = queryTool(storesDb, sql);
+            const cachedStores = getStoresFromCache(storesDb);
+
+            if (cachedStores.length === 0) {
+              // First load — block
+              const storesPath = join(dataDir, "stores.db");
+              await refreshStoresToFile(storesPath);
+              // getStoresDb() will detect inode change on next call
+            }
+
+            // Re-get (may have been swapped)
+            const freshStoresDb = getStoresDb();
+
+            // Check staleness — background refresh if needed
+            if (isStoresCacheStale(freshStoresDb)) {
+              triggerBackgroundRefresh(STORES_KEY, async () => {
+                await refreshStoresToFile(join(dataDir, "stores.db"));
+                log("Stores refreshed in background");
+              });
+            }
+
+            const result = queryTool(freshStoresDb, sql);
             return {
               content: [{ type: "text", text: JSON.stringify(result) }],
             };
           } else {
             // Store specified — query that store's product catalog
+            const storePath = join(dataDir, "stores", `${storeNumber}.db`);
+
+            if (!existsSync(storePath)) {
+              // First load — block
+              const loadResult = await ensureCatalog(dataDir, getSettingsDb(), storeNumber, {
+                onProgress: p => process.stderr.write(`[forager] ${p.message}\n`),
+              });
+              if (!loadResult.success) {
+                return {
+                  content: [{ type: "text", text: JSON.stringify({ success: false, error: loadResult.error }) }],
+                };
+              }
+            } else {
+              // Check staleness — background refresh if needed
+              try {
+                const { readonlyDb } = getStoreDataDb(storeNumber);
+                const status = getCatalogStatus(readonlyDb);
+                if (status.isStale) {
+                  const STALE_MS = 24 * 60 * 60 * 1000;
+                  const dbCount = countStoreDbs(dataDir) + 1;
+                  const targetMs = Math.floor(STALE_MS / (2 * dbCount));
+                  triggerBackgroundRefresh(storeNumber, async () => {
+                    const settingsDb = getSettingsDb();
+                    const creds = await ensureApiCredentials(settingsDb);
+                    if (!creds) return;
+                    await refreshCatalogToFile(storePath, creds.apiKey, creds.appId, storeNumber,
+                      p => process.stderr.write(`[forager] ${p.message}\n`), targetMs);
+                    log(`Store ${storeNumber} catalog refreshed`);
+                  });
+                }
+              } catch { /* pool will handle missing file */ }
+            }
+
             try {
               const { readonlyDb } = getStoreDataDb(storeNumber);
               const result = queryTool(readonlyDb, sql);
@@ -260,45 +233,6 @@ export function createServer(): Server {
               };
             }
           }
-        }
-
-        case "setStore": {
-          const { storeNumber, forceRefresh } = args as {
-            storeNumber?: string;
-            forceRefresh?: boolean;
-          };
-
-          if (typeof storeNumber !== "string") {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    success: false,
-                    error: "Missing required parameter: storeNumber",
-                  }),
-                },
-              ],
-            };
-          }
-
-          const onProgress = (progress: FetchProgress) => {
-            // Log progress to stderr
-            process.stderr.write(`[forager] ${progress.message}\n`);
-          };
-
-          const settingsDb = getSettingsDb();
-          const storesDb = getStoresDb();
-
-          const result = await setStoreTool(dataDir, settingsDb, storesDb, {
-            storeNumber,
-            ...(forceRefresh !== undefined ? { forceRefresh } : {}),
-            onProgress,
-          });
-
-          return {
-            content: [{ type: "text", text: JSON.stringify(result) }],
-          };
         }
 
         default:
@@ -343,14 +277,14 @@ function log(message: string): void {
 async function refreshStoresIfNeeded(): Promise<void> {
   try {
     const storesDb = getStoresDb();
-    const { stores, fromCache, error } = await getStores(storesDb);
-    if (error) {
-      log(`Stores: ${stores.length} (${error})`);
-    } else if (fromCache) {
-      log(`Stores: ${stores.length} (cached)`);
-    } else {
-      log(`Stores: ${stores.length} (fetched from Wegmans)`);
+    if (!isStoresCacheStale(storesDb)) {
+      const cached = getStoresFromCache(storesDb);
+      log(`Stores: ${cached.length} (cached)`);
+      return;
     }
+    const storesPath = join(dataDir, "stores.db");
+    const stores = await refreshStoresToFile(storesPath);
+    log(`Stores: ${stores.length} (fetched from Wegmans)`);
   } catch (err) {
     log(`Failed to load stores: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -374,17 +308,39 @@ async function main(): Promise<void> {
   // Refresh stores cache if needed
   await refreshStoresIfNeeded();
 
+  // Start background refresh scheduler
+  const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+  startScheduler({
+    dataDir,
+    staleThresholdMs: STALE_THRESHOLD_MS,
+    triggerBackgroundRefresh,
+    refreshStores: async () => {
+      await refreshStoresToFile(join(dataDir, "stores.db"));
+    },
+    refreshStoreCatalogs: async (storeNumbers: string[], targetDurationMs?: number) => {
+      const settingsDb = getSettingsDb();
+      const creds = await ensureApiCredentials(settingsDb);
+      if (!creds) return;
+      const storesDir = join(dataDir, "stores");
+      await refreshCatalogsToFile(storesDir, creds.apiKey, creds.appId, storeNumbers,
+        p => process.stderr.write(`[forager] ${p.message}\n`), targetDurationMs);
+    },
+    log,
+  });
+
   // Create and start server
   const server = createServer();
   const transport = new StdioServerTransport();
 
   // Handle graceful shutdown
   process.on("SIGINT", () => {
+    stopScheduler();
     closeDatabases();
     process.exit(0);
   });
 
   process.on("SIGTERM", () => {
+    stopScheduler();
     closeDatabases();
     process.exit(0);
   });
@@ -400,6 +356,7 @@ const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
 if (isMainModule) {
   main().catch((err) => {
     console.error("Server error:", err);
+    stopScheduler();
     closeDatabases();
     process.exit(1);
   });
