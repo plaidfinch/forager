@@ -15,6 +15,7 @@ import {
   getStoresDb,
   getStoreDataDb,
   closeDatabases,
+  setPoolTtlMs,
 } from "../../src/db/connection.js";
 import { initializeStoreDataSchema } from "../../src/db/schema.js";
 
@@ -91,6 +92,36 @@ describe("Multi-Database Connection Management", () => {
       openDatabases(testDir);
 
       expect(() => openDatabases(testDir)).toThrow(/already open/i);
+    });
+
+    it("cleans up leftover .tmp files in stores directory", () => {
+      // Create the stores directory and a leftover temp file
+      const storesDir = join(testDir, "stores");
+      mkdirSync(storesDir, { recursive: true });
+      const tmpPath = join(storesDir, "74.db.tmp");
+      const tmpDb = new DatabaseImpl(tmpPath);
+      tmpDb.close();
+
+      expect(existsSync(tmpPath)).toBe(true);
+
+      openDatabases(testDir);
+
+      expect(existsSync(tmpPath)).toBe(false);
+    });
+
+    it("does not delete .db files during cleanup", () => {
+      // Create the stores directory with a real .db file
+      const storesDir = join(testDir, "stores");
+      mkdirSync(storesDir, { recursive: true });
+      const dbPath = join(storesDir, "74.db");
+      const db = new DatabaseImpl(dbPath);
+      db.pragma("foreign_keys = ON");
+      initializeStoreDataSchema(db);
+      db.close();
+
+      openDatabases(testDir);
+
+      expect(existsSync(dbPath)).toBe(true);
     });
   });
 
@@ -338,6 +369,64 @@ describe("Multi-Database Connection Management", () => {
 
     it("getStoreDataDb throws if database file does not exist", () => {
       expect(() => getStoreDataDb("999")).toThrow();
+    });
+  });
+
+  describe("TTL-based eviction", () => {
+    beforeEach(() => {
+      openDatabases(testDir);
+    });
+
+    afterEach(() => {
+      setPoolTtlMs(5 * 60 * 1000); // Reset to default
+    });
+
+    it("evicts connections that exceed the TTL", () => {
+      // Set TTL to 0 so everything expires immediately
+      setPoolTtlMs(0);
+
+      // Create two store database files
+      for (const num of ["1", "2"]) {
+        const path = join(testDir, "stores", `${num}.db`);
+        const db = new DatabaseImpl(path);
+        db.pragma("foreign_keys = ON");
+        initializeStoreDataSchema(db);
+        db.close();
+      }
+
+      // Access store 1
+      const { readonlyDb: db1a } = getStoreDataDb("1");
+
+      // Access store 2 — this should evict store 1 (TTL=0, so store 1 is expired)
+      getStoreDataDb("2");
+
+      // Access store 1 again — should be a NEW connection (evicted and reopened)
+      const { readonlyDb: db1b } = getStoreDataDb("1");
+      expect(db1b).not.toBe(db1a);
+    });
+
+    it("keeps connections that are within the TTL", () => {
+      // Set TTL to a very large value
+      setPoolTtlMs(60 * 60 * 1000); // 1 hour
+
+      // Create two store database files
+      for (const num of ["1", "2"]) {
+        const path = join(testDir, "stores", `${num}.db`);
+        const db = new DatabaseImpl(path);
+        db.pragma("foreign_keys = ON");
+        initializeStoreDataSchema(db);
+        db.close();
+      }
+
+      // Access store 1
+      const { readonlyDb: db1a } = getStoreDataDb("1");
+
+      // Access store 2
+      getStoreDataDb("2");
+
+      // Access store 1 again — should be SAME connection (within TTL)
+      const { readonlyDb: db1b } = getStoreDataDb("1");
+      expect(db1b).toBe(db1a);
     });
   });
 });

@@ -13,7 +13,7 @@
  */
 
 import Database from "better-sqlite3";
-import { existsSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, statSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   initializeSettingsSchema,
@@ -26,6 +26,7 @@ interface CachedStoreConnection {
   readonlyDb: Database.Database;
   path: string;
   ino: number;
+  lastAccessed: number;
 }
 
 interface ConnectionState {
@@ -36,6 +37,13 @@ interface ConnectionState {
 }
 
 let state: ConnectionState | null = null;
+
+let poolTtlMs = 5 * 60 * 1000; // 5 minutes
+
+/** Set the pool TTL for testing. */
+export function setPoolTtlMs(ms: number): void {
+  poolTtlMs = ms;
+}
 
 /**
  * Open settings and stores databases.
@@ -51,6 +59,18 @@ export function openDatabases(dataDir: string): void {
   const storesDir = join(dataDir, "stores");
   if (!existsSync(storesDir)) {
     mkdirSync(storesDir, { recursive: true });
+  }
+
+  // Clean up leftover .tmp files from crashed refresh operations
+  const storeFiles = readdirSync(storesDir);
+  for (const file of storeFiles) {
+    if (file.endsWith(".tmp")) {
+      try {
+        unlinkSync(join(storesDir, file));
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
   }
 
   const settingsPath = join(dataDir, "settings.db");
@@ -143,12 +163,22 @@ export function getStoreDataDb(storeNumber: string): {
     );
   }
 
+  // Evict connections that haven't been accessed within the TTL
+  const now = Date.now();
+  for (const [key, entry] of state.storePool) {
+    if (key !== storeNumber && now - entry.lastAccessed >= poolTtlMs) {
+      closeStoreEntry(entry);
+      state.storePool.delete(key);
+    }
+  }
+
   const cached = state.storePool.get(storeNumber);
 
   if (cached) {
     // Check if file was swapped (inode changed)
     const currentIno = statSync(cached.path).ino;
     if (currentIno === cached.ino) {
+      cached.lastAccessed = Date.now();
       return { db: cached.db, readonlyDb: cached.readonlyDb };
     }
 
@@ -165,9 +195,9 @@ export function getStoreDataDb(storeNumber: string): {
     );
   }
 
-  const entry = openStoreEntry(state.dataDir, storeNumber);
-  state.storePool.set(storeNumber, entry);
-  return { db: entry.db, readonlyDb: entry.readonlyDb };
+  const newEntry = openStoreEntry(state.dataDir, storeNumber);
+  state.storePool.set(storeNumber, newEntry);
+  return { db: newEntry.db, readonlyDb: newEntry.readonlyDb };
 }
 
 /**
@@ -204,7 +234,7 @@ function openStoreEntry(
 
   const ino = statSync(storePath).ino;
 
-  return { db, readonlyDb, path: storePath, ino };
+  return { db, readonlyDb, path: storePath, ino, lastAccessed: Date.now() };
 }
 
 function closeStoreEntry(entry: CachedStoreConnection): void {
