@@ -14,7 +14,6 @@ import {
   getSettingsDb,
   getStoresDb,
   getStoreDataDb,
-  getActiveStoreNumber,
   closeDatabases,
 } from "../../src/db/connection.js";
 import { initializeStoreDataSchema } from "../../src/db/schema.js";
@@ -109,7 +108,7 @@ describe("Multi-Database Connection Management", () => {
     it("initializes store data schema with products table", () => {
       openStoreDatabase(testDir, "74");
 
-      const { db } = getStoreDataDb();
+      const { db } = getStoreDataDb("74");
       const tables = db
         .prepare(
           `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`
@@ -121,36 +120,36 @@ describe("Multi-Database Connection Management", () => {
       expect(tables.map((t) => t.name)).toContain("nutrition_facts");
     });
 
-    it("sets active store number", () => {
+    it("keeps both stores open when switching", () => {
       openStoreDatabase(testDir, "74");
-
-      expect(getActiveStoreNumber()).toBe("74");
-    });
-
-    it("switches stores - closes old database and opens new", () => {
-      openStoreDatabase(testDir, "74");
-      const { db: db74 } = getStoreDataDb();
+      const { db: db74 } = getStoreDataDb("74");
 
       // Insert data into store 74
       db74.exec(`INSERT INTO products (product_id, name) VALUES ('p1', 'Product 1')`);
 
-      // Switch to store 101
+      // Open store 101 as well (doesn't close 74 anymore)
       openStoreDatabase(testDir, "101");
-      const { db: db101 } = getStoreDataDb();
+      const { db: db101 } = getStoreDataDb("101");
 
       // Should be a fresh database with no products
-      const products = db101
+      const products101 = db101
         .prepare(`SELECT * FROM products`)
         .all() as Array<{ product_id: string }>;
+      expect(products101.length).toBe(0);
 
-      expect(products.length).toBe(0);
-      expect(getActiveStoreNumber()).toBe("101");
+      // Store 74 should still be accessible with its data
+      const { db: db74Again } = getStoreDataDb("74");
+      const products74 = db74Again
+        .prepare(`SELECT * FROM products`)
+        .all() as Array<{ product_id: string }>;
+      expect(products74.length).toBe(1);
+      expect(products74[0].product_id).toBe("p1");
     });
 
     it("provides readonly connection for store database", () => {
       openStoreDatabase(testDir, "74");
 
-      const { db, readonlyDb } = getStoreDataDb();
+      const { db, readonlyDb } = getStoreDataDb("74");
       expect(readonlyDb).toBeDefined();
       expect(readonlyDb).not.toBe(db);
     });
@@ -193,38 +192,19 @@ describe("Multi-Database Connection Management", () => {
       openDatabases(testDir);
       openStoreDatabase(testDir, "74");
 
-      const { db, readonlyDb } = getStoreDataDb();
+      const { db, readonlyDb } = getStoreDataDb("74");
       expect(db).toBeDefined();
       expect(readonlyDb).toBeDefined();
     });
 
-    it("throws when no store selected", () => {
+    it("throws when store database file does not exist", () => {
       openDatabases(testDir);
 
-      expect(() => getStoreDataDb()).toThrow(/no store selected/i);
+      expect(() => getStoreDataDb("999")).toThrow(/not found/i);
     });
 
     it("throws when databases not initialized", () => {
-      expect(() => getStoreDataDb()).toThrow(/not initialized/i);
-    });
-  });
-
-  describe("getActiveStoreNumber", () => {
-    it("returns null when no store selected", () => {
-      openDatabases(testDir);
-
-      expect(getActiveStoreNumber()).toBeNull();
-    });
-
-    it("returns store number when store is selected", () => {
-      openDatabases(testDir);
-      openStoreDatabase(testDir, "74");
-
-      expect(getActiveStoreNumber()).toBe("74");
-    });
-
-    it("returns null when databases not initialized", () => {
-      expect(getActiveStoreNumber()).toBeNull();
+      expect(() => getStoreDataDb("74")).toThrow(/not initialized/i);
     });
   });
 
@@ -237,7 +217,7 @@ describe("Multi-Database Connection Management", () => {
 
       expect(() => getSettingsDb()).toThrow(/not initialized/i);
       expect(() => getStoresDb()).toThrow(/not initialized/i);
-      expect(() => getStoreDataDb()).toThrow(/not initialized/i);
+      expect(() => getStoreDataDb("74")).toThrow(/not initialized/i);
     });
 
     it("is idempotent - can be called multiple times", () => {
@@ -260,7 +240,7 @@ describe("Multi-Database Connection Management", () => {
       openDatabases(testDir);
       openStoreDatabase(testDir, "74");
 
-      const { readonlyDb } = getStoreDataDb();
+      const { readonlyDb } = getStoreDataDb("74");
 
       expect(() => {
         readonlyDb.exec(`INSERT INTO products (product_id, name) VALUES ('p1', 'Test')`);
