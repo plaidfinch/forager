@@ -93,7 +93,7 @@ export function getToolDefinitions(storesDb?: Database.Database, storeDataDb?: D
   }
 
   // Get products schema (only if store is selected)
-  let productsSchemaText = "No store catalog loaded yet. Use setStore to fetch a store's catalog, then pass the storeNumber to query it.";
+  let productsSchemaText = "No store catalog loaded yet. Use setStore to fetch a store's catalog first.";
   if (storeDataDb) {
     const productsSchemaResult = schemaTool(storeDataDb);
     productsSchemaText = formatSchemaForDescription(productsSchemaResult);
@@ -102,14 +102,14 @@ export function getToolDefinitions(storesDb?: Database.Database, storeDataDb?: D
   return [
     {
       name: "query",
-      description: `Execute a read-only SQL query. Use the 'database' parameter to choose:
-- "stores": Query store locations (find store numbers, cities, etc.)
-- "products": Query product catalog for a specific store (requires storeNumber parameter)
+      description: `Execute a read-only SQL query. Use the 'storeNumber' parameter to choose which database to query:
+- Omit storeNumber: Query runs against the store locations table (find store numbers, cities, etc.)
+- Provide storeNumber: Query runs against that store's product catalog
 
-STORES SCHEMA (database="stores"):
+STORES SCHEMA (when storeNumber is omitted):
 ${storesSchemaText}
 
-PRODUCTS SCHEMA (database="products"):
+PRODUCTS SCHEMA (when storeNumber is provided):
 ${productsSchemaText}`,
       inputSchema: {
         type: "object" as const,
@@ -118,15 +118,10 @@ ${productsSchemaText}`,
             type: "string",
             description: "The SQL SELECT statement to execute",
           },
-          database: {
-            type: "string",
-            enum: ["stores", "products"],
-            description: 'Which database to query: "stores" for store locations, "products" for product catalog (default: "products")',
-          },
           storeNumber: {
             type: "string",
             description:
-              "Store number for product queries (required when database='products'). Query the stores database first to find store numbers.",
+              "Wegmans store number. When provided, the query runs against that store's product catalog. When omitted, the query runs against the stores table. Query the stores table first to find store numbers by city, state, or zip code.",
           },
         },
         required: ["sql"],
@@ -223,9 +218,8 @@ export function createServer(): Server {
     try {
       switch (name) {
         case "query": {
-          const { sql, database = "products", storeNumber } = args as {
+          const { sql, storeNumber } = args as {
             sql?: string;
-            database?: "stores" | "products";
             storeNumber?: string;
           };
 
@@ -237,29 +231,15 @@ export function createServer(): Server {
             };
           }
 
-          if (database === "stores") {
+          if (!storeNumber) {
+            // No store specified — query the stores table
             const storesDb = getStoresDb();
             const result = queryTool(storesDb, sql);
             return {
               content: [{ type: "text", text: JSON.stringify(result) }],
             };
           } else {
-            // database === "products"
-            if (!storeNumber) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({
-                      success: false,
-                      error:
-                        "Missing required parameter: storeNumber. Query the stores database first to find the store number, then pass it here.",
-                    }),
-                  },
-                ],
-              };
-            }
-
+            // Store specified — query that store's product catalog
             try {
               const { readonlyDb } = getStoreDataDb(storeNumber);
               const result = queryTool(readonlyDb, sql);

@@ -91,7 +91,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(toolNames).toContain("setStore");
     });
 
-    it("query tool has correct schema with database and storeNumber parameters", async () => {
+    it("query tool has correct schema with storeNumber parameter", async () => {
       const result = await client.listTools();
 
       const queryTool = result.tools.find((t) => t.name === "query");
@@ -104,11 +104,6 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
         type: "object",
         properties: {
           sql: { type: "string", description: expect.any(String) },
-          database: {
-            type: "string",
-            enum: ["stores", "products"],
-            description: expect.any(String),
-          },
           storeNumber: {
             type: "string",
             description: expect.any(String),
@@ -136,13 +131,12 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
   });
 
   describe("query tool", () => {
-    it("queries stores database with database='stores'", async () => {
+    it("queries stores table when storeNumber is omitted", async () => {
       // Stores are fetched and cached on server startup
       const result = await client.callTool({
         name: "query",
         arguments: {
           sql: "SELECT name, city, state FROM stores ORDER BY CAST(store_number AS INTEGER) LIMIT 3",
-          database: "stores",
         },
       });
 
@@ -153,40 +147,25 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.rowCount).toBeGreaterThan(0);
     });
 
-    it("returns error when querying products without storeNumber", async () => {
+    it("defaults to stores table when no storeNumber provided", async () => {
+      // Without storeNumber, queries against the stores table
       const result = await client.callTool({
         name: "query",
-        arguments: {
-          sql: "SELECT COUNT(*) as count FROM products",
-          database: "products",
-        },
+        arguments: { sql: "SELECT COUNT(*) as count FROM stores" },
       });
 
       const response = JSON.parse((result.content[0] as { text: string }).text);
 
-      expect(response.success).toBe(false);
-      expect(response.error).toContain("Missing required parameter: storeNumber");
+      expect(response.success).toBe(true);
+      expect(response.rows).toHaveLength(1);
+      expect(response.rows[0].count).toBeGreaterThan(0);
     });
 
-    it("defaults to products database when database parameter not specified", async () => {
-      // Without database parameter, should try products (and fail since no storeNumber)
-      const result = await client.callTool({
-        name: "query",
-        arguments: { sql: "SELECT COUNT(*) as count FROM products" },
-      });
-
-      const response = JSON.parse((result.content[0] as { text: string }).text);
-
-      expect(response.success).toBe(false);
-      expect(response.error).toContain("Missing required parameter: storeNumber");
-    });
-
-    it("returns error for invalid SQL on stores database", async () => {
+    it("returns error for invalid SQL", async () => {
       const result = await client.callTool({
         name: "query",
         arguments: {
           sql: "SELEKT * FROM stores",
-          database: "stores",
         },
       });
 
@@ -197,12 +176,11 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
       expect(response.error).toContain("syntax");
     });
 
-    it("rejects non-SELECT statements on stores database", async () => {
+    it("rejects non-SELECT statements", async () => {
       const result = await client.callTool({
         name: "query",
         arguments: {
           sql: "INSERT INTO stores (store_number, name) VALUES ('999', 'Test')",
-          database: "stores",
         },
       });
 
@@ -210,24 +188,6 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
 
       expect(response.success).toBe(false);
       expect(response.error).toBeDefined();
-    });
-
-    it("can count stores in the stores database", async () => {
-      const result = await client.callTool({
-        name: "query",
-        arguments: {
-          sql: "SELECT COUNT(*) as count FROM stores",
-          database: "stores",
-        },
-      });
-
-      const response = JSON.parse((result.content[0] as { text: string }).text);
-
-      expect(response.success).toBe(true);
-      expect(response.columns).toEqual(["count"]);
-      expect(response.rows).toHaveLength(1);
-      // Should have stores fetched on startup
-      expect(response.rows[0].count).toBeGreaterThan(0);
     });
   });
 

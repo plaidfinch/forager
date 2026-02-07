@@ -46,22 +46,16 @@ describe("MCP Server", () => {
       expect(TOOL_DEFINITIONS).toHaveLength(2);
     });
 
-    it("defines query tool with sql, database, and storeNumber inputs", () => {
+    it("defines query tool with sql and storeNumber inputs", () => {
       const queryToolDef = TOOL_DEFINITIONS.find((t) => t.name === "query");
 
       expect(queryToolDef).toBeDefined();
       expect(queryToolDef?.description).toBeDefined();
-      expect(queryToolDef?.description).toContain("stores");
-      expect(queryToolDef?.description).toContain("products");
+      expect(queryToolDef?.description).toContain("storeNumber");
       expect(queryToolDef?.inputSchema).toMatchObject({
         type: "object",
         properties: {
           sql: { type: "string", description: expect.any(String) },
-          database: {
-            type: "string",
-            enum: ["stores", "products"],
-            description: expect.any(String),
-          },
           storeNumber: {
             type: "string",
             description: expect.any(String),
@@ -69,6 +63,8 @@ describe("MCP Server", () => {
         },
         required: ["sql"],
       });
+      // No 'database' parameter — routing is based on storeNumber presence
+      expect(queryToolDef?.inputSchema.properties).not.toHaveProperty("database");
     });
 
     it("defines setStore tool", () => {
@@ -128,16 +124,14 @@ describe("Query Tool Handler", () => {
     }
   });
 
-  describe("database parameter", () => {
-    it("queries stores.db when database='stores'", () => {
-      // Add a store to stores.db
+  describe("store routing", () => {
+    it("queries stores.db when storeNumber is omitted", () => {
       const storesDb = getStoresDb();
       storesDb.exec(`
         INSERT INTO stores (store_number, name, city, state)
         VALUES ('74', 'Geneva', 'Geneva', 'NY')
       `);
 
-      // Query stores database
       const result = queryTool(storesDb, "SELECT store_number, name FROM stores");
 
       expect(result.success).toBe(true);
@@ -148,18 +142,15 @@ describe("Query Tool Handler", () => {
       });
     });
 
-    it("queries store database when database='products'", () => {
-      // Open a store database
+    it("queries store database when storeNumber is provided", () => {
       openStoreDatabase(testDir, "74");
       const { db } = getStoreDataDb("74");
 
-      // Add a product
       db.exec(`
         INSERT INTO products (product_id, name, brand)
         VALUES ('p1', 'Test Product', 'Test Brand')
       `);
 
-      // Query products database
       const result = queryTool(db, "SELECT product_id, name FROM products");
 
       expect(result.success).toBe(true);
@@ -168,19 +159,6 @@ describe("Query Tool Handler", () => {
         product_id: "p1",
         name: "Test Product",
       });
-    });
-
-    it("returns error when database='products' but no storeNumber provided", () => {
-      // Don't open any store database - just have the base databases
-      // The handler should detect this and return an error
-
-      // This test validates the behavior we want:
-      // When querying products without a storeNumber, return a helpful error
-      const expectedError = "Missing required parameter: storeNumber. Query the stores database first to find the store number, then pass it here.";
-
-      // The actual test of the handler will be in the integration
-      // For now, just validate the error message format
-      expect(expectedError).toContain("storeNumber");
     });
   });
 });
@@ -235,6 +213,6 @@ describe("Tool Definitions with Database Context", () => {
     const tools = getToolDefinitions(storesDb, null);
     const queryToolDef = tools.find((t) => t.name === "query");
 
-    expect(queryToolDef?.description).toContain("Use setStore to fetch");
+    expect(queryToolDef?.description).toContain("Use setStore to fetch a store");
   });
 });
