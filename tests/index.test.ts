@@ -70,7 +70,7 @@ describe("MCP Server", () => {
     it("defines setStore tool", () => {
       const setStoreToolDef = TOOL_DEFINITIONS.find((t) => t.name === "setStore");
       expect(setStoreToolDef).toBeDefined();
-      expect(setStoreToolDef?.description).toContain("Set the active Wegmans store");
+      expect(setStoreToolDef?.description).toContain("Set the active Wegmans store and fetch its product catalog");
     });
   });
 });

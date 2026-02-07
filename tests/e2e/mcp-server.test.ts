@@ -118,7 +118,7 @@ describe.skipIf(SKIP_INTEGRATION)("MCP Server E2E", () => {
 
       const setStoreTool = result.tools.find((t) => t.name === "setStore");
       expect(setStoreTool).toBeDefined();
-      expect(setStoreTool?.description).toContain("Set the active Wegmans store");
+      expect(setStoreTool?.description).toContain("Set the active Wegmans store and fetch its product catalog");
       expect(setStoreTool?.inputSchema).toEqual({
         type: "object",
         properties: {

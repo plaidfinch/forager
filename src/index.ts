@@ -133,7 +133,7 @@ ${productsSchemaText}`,
     {
       name: "setStore",
       description:
-        "Set the active Wegmans store and fetch its product catalog. Call this first to specify which store to query. Fetches full catalog (~29,000 products) on first use for a store. IMPORTANT: Before calling this tool, ask the user which Wegmans store they want to use (by city, state, or zip code), then query the stores table (database='stores') to find the matching store number.",
+        "Set the active Wegmans store and fetch its product catalog. Fetches full catalog (~29,000 products) on first use for a store. IMPORTANT: Before calling this tool, ask the user which Wegmans store they want to use (by city, state, or zip code), then use the query tool (without storeNumber) to find the matching store number.",
       inputSchema: {
         type: "object" as const,
         properties: {
