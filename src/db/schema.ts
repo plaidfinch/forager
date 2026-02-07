@@ -164,6 +164,24 @@ export function initializeStoreDataSchema(db: Database.Database): void {
     )
   `);
 
+  // Materialized junction table for product tags (replaces json_each view).
+  // Drop the legacy view if migrating from an older schema.
+  const productTagsType = db
+    .prepare(`SELECT type FROM sqlite_master WHERE name = 'product_tags'`)
+    .get() as { type: string } | undefined;
+  if (productTagsType?.type === "view") {
+    db.exec(`DROP VIEW product_tags`);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_tags (
+      product_id TEXT NOT NULL,
+      tag_name TEXT NOT NULL,
+      tag_type TEXT NOT NULL CHECK (tag_type IN ('filter', 'popular')),
+      PRIMARY KEY (product_id, tag_name, tag_type),
+      FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
+    )
+  `);
+
   // View for category lookups
   db.exec(`
     CREATE VIEW IF NOT EXISTS product_categories AS
@@ -172,23 +190,17 @@ export function initializeStoreDataSchema(db: Database.Database): void {
     WHERE category_path IS NOT NULL
   `);
 
-  // View for tag lookups (unpacks JSON arrays)
-  db.exec(`
-    CREATE VIEW IF NOT EXISTS product_tags AS
-    SELECT product_id, value as tag_name, 'filter' as tag_type
-    FROM products, json_each(tags_filter)
-    WHERE tags_filter IS NOT NULL
-    UNION ALL
-    SELECT product_id, value as tag_name, 'popular' as tag_type
-    FROM products, json_each(tags_popular)
-    WHERE tags_popular IS NOT NULL
-  `);
-
-  // Create useful indexes
+  // Create indexes
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
     CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand);
     CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_path);
+    CREATE INDEX IF NOT EXISTS idx_products_aisle ON products(aisle);
+    CREATE INDEX IF NOT EXISTS idx_products_upc ON products(upc);
+    CREATE INDEX IF NOT EXISTS idx_products_available ON products(is_available);
+    CREATE INDEX IF NOT EXISTS idx_products_price ON products(price_in_store);
     CREATE INDEX IF NOT EXISTS idx_nutrition_facts_product ON nutrition_facts(product_id);
+    CREATE INDEX IF NOT EXISTS idx_nutrition_nutrient ON nutrition_facts(nutrient, quantity);
+    CREATE INDEX IF NOT EXISTS idx_product_tags_name ON product_tags(tag_name, tag_type);
   `);
 }

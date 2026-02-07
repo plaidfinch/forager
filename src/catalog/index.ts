@@ -5,8 +5,11 @@
  */
 
 import type Database from "better-sqlite3";
+import DatabaseImpl from "better-sqlite3";
+import { existsSync, renameSync, unlinkSync } from "node:fs";
 import { fetchCatalog, AlgoliaError, type FetchProgress, type AlgoliaHit } from "./fetch.js";
 import { populateOntology, getOntologyStats } from "./ontology.js";
+import { initializeStoreDataSchema } from "../db/schema.js";
 import {
   transformHitToProduct,
   transformHitToServing,
@@ -14,6 +17,7 @@ import {
 } from "../algolia/client.js";
 import {
   upsertProduct,
+  upsertProductTags,
   upsertServing,
   upsertNutritionFacts,
 } from "../db/products.js";
@@ -117,9 +121,10 @@ export async function refreshCatalog(
   try {
     const beforeStats = getOntologyStats(db);
 
-    // Clear ontology tables so counts are accurate for the fresh catalog
+    // Clear derived tables so counts are accurate for the fresh catalog
     db.exec("DELETE FROM categories");
     db.exec("DELETE FROM tags");
+    db.exec("DELETE FROM product_tags");
 
     const now = new Date().toISOString();
     let productsAdded = 0;
@@ -137,6 +142,7 @@ export async function refreshCatalog(
         const nutritionFacts = transformHitToNutritionFacts(hit);
 
         upsertProduct(db, product);
+        upsertProductTags(db, product.productId, product.tagsFilter, product.tagsPopular);
 
         if (serving) {
           upsertServing(db, serving);
@@ -174,6 +180,59 @@ export async function refreshCatalog(
       result.status = err.status;
     }
     return result;
+  }
+}
+
+/**
+ * Refresh the catalog into a new database file, then atomically swap it
+ * into place. Readers with open connections to the old file continue
+ * uninterrupted; new connections get the fresh data.
+ *
+ * On failure, the temp file is cleaned up and the existing database is
+ * left untouched.
+ *
+ * @param targetPath - Final path for the store database (e.g. stores/74.db)
+ * @param apiKey - Algolia API key
+ * @param appId - Algolia application ID
+ * @param storeNumber - Store number to fetch
+ * @param onProgress - Optional progress callback
+ * @returns Refresh result with counts
+ */
+export async function refreshCatalogToFile(
+  targetPath: string,
+  apiKey: string,
+  appId: string,
+  storeNumber: string,
+  onProgress?: (progress: FetchProgress) => void
+): Promise<RefreshResult> {
+  const tmpPath = targetPath + ".tmp";
+
+  // Clean up any leftover temp file from a crashed refresh
+  if (existsSync(tmpPath)) {
+    unlinkSync(tmpPath);
+  }
+
+  const tmpDb = new DatabaseImpl(tmpPath);
+  tmpDb.pragma("foreign_keys = ON");
+  initializeStoreDataSchema(tmpDb);
+
+  try {
+    const result = await refreshCatalog(tmpDb, apiKey, appId, storeNumber, onProgress);
+    tmpDb.close();
+
+    if (result.success) {
+      renameSync(tmpPath, targetPath);
+    } else {
+      if (existsSync(tmpPath)) unlinkSync(tmpPath);
+    }
+
+    return result;
+  } catch (err) {
+    try { tmpDb.close(); } catch { /* ignore close errors */ }
+    if (existsSync(tmpPath)) {
+      try { unlinkSync(tmpPath); } catch { /* ignore cleanup errors */ }
+    }
+    throw err;
   }
 }
 

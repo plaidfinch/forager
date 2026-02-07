@@ -42,7 +42,7 @@ describe("schemaTool", () => {
 
     expect(result.success).toBe(true);
     expect(result.tables).toBeDefined();
-    expect(result.tables).toHaveLength(5); // Store data schema has 5 tables
+    expect(result.tables).toHaveLength(6); // Store data schema has 6 tables
     expect(result.error).toBeUndefined();
   });
 
@@ -86,8 +86,9 @@ describe("schemaTool", () => {
     expect(tableNames).toContain("nutrition_facts");
     expect(tableNames).toContain("categories");
     expect(tableNames).toContain("tags");
+    expect(tableNames).toContain("product_tags");
 
-    expect(result.tables).toHaveLength(5);
+    expect(result.tables).toHaveLength(6);
   });
 
   it("DDL includes column definitions", () => {
@@ -102,7 +103,7 @@ describe("schemaTool", () => {
     expect(productsTable!.ddl).toContain("brand");
   });
 
-  it("returns views for product_categories and product_tags", () => {
+  it("returns product_categories view", () => {
     const result = schemaTool(db);
 
     expect(result.success).toBe(true);
@@ -111,16 +112,19 @@ describe("schemaTool", () => {
     const viewNames = result.views!.map((v) => v.name);
 
     expect(viewNames).toContain("product_categories");
-    expect(viewNames).toContain("product_tags");
   });
 
-  it("view DDL shows how to query product tags", () => {
+  it("returns product_tags as a table", () => {
     const result = schemaTool(db);
 
-    const productTagsView = result.views?.find((v) => v.name === "product_tags");
+    expect(result.success).toBe(true);
 
-    expect(productTagsView).toBeDefined();
-    expect(productTagsView!.ddl).toContain("tag_name");
-    expect(productTagsView!.ddl).toContain("tag_type");
+    const tableNames = result.tables!.map((t) => t.name);
+    expect(tableNames).toContain("product_tags");
+
+    const productTagsTable = result.tables!.find((t) => t.name === "product_tags");
+    expect(productTagsTable).toBeDefined();
+    expect(productTagsTable!.ddl).toContain("tag_name");
+    expect(productTagsTable!.ddl).toContain("tag_type");
   });
 });

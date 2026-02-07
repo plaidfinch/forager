@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
   getCatalogStatus,
   refreshCatalog,
+  refreshCatalogToFile,
   type FetchProgress,
   type RefreshResult,
 } from "../catalog/index.js";
@@ -263,13 +264,23 @@ export async function setStoreTool(
         };
       }
 
-      const result = await refreshCatalogFn(
-        storeDb,
-        credentials.apiKey,
-        credentials.appId,
-        storeNumber,
-        onProgress
-      );
+      // Attempt refresh, with auth retry logic
+      const doRefresh = async (creds: ApiCredentials): Promise<RefreshResult> => {
+        if (refreshCatalogFn !== refreshCatalog) {
+          // Test path: use injected function with the open db
+          return refreshCatalogFn(storeDb!, creds.apiKey, creds.appId, storeNumber, onProgress);
+        }
+        // Production path: atomic swap via temp file
+        const storePath = join(dataDir, "stores", `${storeNumber}.db`);
+        storeDb!.close();
+        storeDb = null;
+        const result = await refreshCatalogToFile(storePath, creds.apiKey, creds.appId, storeNumber, onProgress);
+        // Reopen the (possibly new) database for product count
+        storeDb = openStoreDatabaseFn(dataDir, storeNumber);
+        return result;
+      };
+
+      const result = await doRefresh(credentials);
 
       if (!result.success) {
         // Check if this is an auth error (401/403) - credentials may be expired
@@ -296,13 +307,7 @@ export async function setStoreTool(
           }
 
           // Retry with fresh credentials
-          const retryResult = await refreshCatalogFn(
-            storeDb,
-            freshCredentials.apiKey,
-            freshCredentials.appId,
-            storeNumber,
-            onProgress
-          );
+          const retryResult = await doRefresh(freshCredentials);
 
           if (!retryResult.success) {
             return {
@@ -318,7 +323,7 @@ export async function setStoreTool(
             success: true,
             storeNumber,
             refreshed: true,
-            productCount: getProductCount(storeDb),
+            productCount: getProductCount(storeDb!),
           };
         }
 
@@ -335,7 +340,7 @@ export async function setStoreTool(
         success: true,
         storeNumber,
         refreshed: true,
-        productCount: getProductCount(storeDb),
+        productCount: getProductCount(storeDb!),
       };
     }
 

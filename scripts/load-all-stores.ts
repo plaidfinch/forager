@@ -12,12 +12,11 @@ import Database from "better-sqlite3";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { refreshCatalog } from "../src/catalog/index.js";
+import { refreshCatalogToFile } from "../src/catalog/index.js";
 import { extractAlgoliaKey } from "../src/algolia/keyExtractor.js";
 import {
   initializeSettingsSchema,
   initializeStoresSchema,
-  initializeStoreDataSchema,
 } from "../src/db/schema.js";
 
 const CONCURRENCY = parseInt(process.argv[2] ?? "3", 10);
@@ -72,45 +71,42 @@ async function main() {
   // Process stores with bounded concurrency
   const results: StoreResult[] = [];
   let completed = 0;
-  let queued = 0;
 
   async function processStore(storeNumber: string): Promise<StoreResult> {
     const start = Date.now();
     const storePath = join(storesDir, `${storeNumber}.db`);
 
     try {
-      const storeDb = new Database(storePath);
-      storeDb.pragma("foreign_keys = ON");
-      initializeStoreDataSchema(storeDb);
-
       // Skip if already populated
-      const existing = (storeDb.prepare("SELECT COUNT(*) as c FROM products").get() as { c: number }).c;
-      if (existing > 0) {
-        storeDb.close();
-        completed++;
-        const durationMs = Date.now() - start;
-        console.log(`[${completed}/${stores.length}] Store ${storeNumber}: ${existing} products (skipped)`);
-        return { storeNumber, success: true, productCount: existing, durationMs };
+      if (existsSync(storePath)) {
+        const storeDb = new Database(storePath, { readonly: true });
+        try {
+          const existing = (storeDb.prepare("SELECT COUNT(*) as c FROM products").get() as { c: number }).c;
+          if (existing > 0) {
+            completed++;
+            const durationMs = Date.now() - start;
+            console.log(`[${completed}/${stores.length}] Store ${storeNumber}: ${existing} products (skipped)`);
+            return { storeNumber, success: true, productCount: existing, durationMs };
+          }
+        } finally {
+          storeDb.close();
+        }
       }
 
-      try {
-        const result = await refreshCatalog(storeDb, apiKey, appId, storeNumber);
-        const durationMs = Date.now() - start;
+      // Atomic refresh: write to temp file, then rename
+      const result = await refreshCatalogToFile(storePath, apiKey, appId, storeNumber);
+      const durationMs = Date.now() - start;
 
-        if (result.success) {
-          const count = (storeDb.prepare("SELECT COUNT(*) as c FROM products").get() as { c: number }).c;
-          completed++;
-          console.log(
-            `[${completed}/${stores.length}] Store ${storeNumber}: ${count} products (${(durationMs / 1000).toFixed(1)}s)`
-          );
-          return { storeNumber, success: true, productCount: count, durationMs };
-        } else {
-          completed++;
-          console.error(`[${completed}/${stores.length}] Store ${storeNumber}: FAILED - ${result.error} (${(durationMs / 1000).toFixed(1)}s)`);
-          return { storeNumber, success: false, error: result.error, durationMs };
-        }
-      } finally {
-        storeDb.close();
+      if (result.success) {
+        completed++;
+        console.log(
+          `[${completed}/${stores.length}] Store ${storeNumber}: ${result.productsAdded} products (${(durationMs / 1000).toFixed(1)}s)`
+        );
+        return { storeNumber, success: true, productCount: result.productsAdded, durationMs };
+      } else {
+        completed++;
+        console.error(`[${completed}/${stores.length}] Store ${storeNumber}: FAILED - ${result.error} (${(durationMs / 1000).toFixed(1)}s)`);
+        return { storeNumber, success: false, error: result.error, durationMs };
       }
     } catch (err) {
       const durationMs = Date.now() - start;

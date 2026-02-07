@@ -174,6 +174,40 @@ export function deleteProduct(db: Database.Database, productId: string): boolean
 }
 
 // ============================================================================
+// Product Tags (materialized junction table)
+// ============================================================================
+
+/**
+ * Insert product tags into the junction table.
+ * Uses OR IGNORE to skip duplicates from overlapping batches.
+ */
+export function upsertProductTags(
+  db: Database.Database,
+  productId: string,
+  tagsFilter: string | null,
+  tagsPopular: string | null
+): void {
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO product_tags (product_id, tag_name, tag_type)
+    VALUES (?, ?, ?)
+  `);
+
+  if (tagsFilter) {
+    const tags = JSON.parse(tagsFilter) as string[];
+    for (const tag of tags) {
+      stmt.run(productId, tag, "filter");
+    }
+  }
+
+  if (tagsPopular) {
+    const tags = JSON.parse(tagsPopular) as string[];
+    for (const tag of tags) {
+      stmt.run(productId, tag, "popular");
+    }
+  }
+}
+
+// ============================================================================
 // Servings
 // ============================================================================
 

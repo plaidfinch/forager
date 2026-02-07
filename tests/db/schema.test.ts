@@ -199,7 +199,8 @@ describe("initializeStoreDataSchema", () => {
     expect(tableNames).toContain("nutrition_facts");
     expect(tableNames).toContain("categories");
     expect(tableNames).toContain("tags");
-    expect(tableNames).toHaveLength(5);
+    expect(tableNames).toContain("product_tags");
+    expect(tableNames).toHaveLength(6);
   });
 
   it("does NOT create store_products table", () => {
@@ -370,21 +371,26 @@ describe("initializeStoreDataSchema", () => {
     expect(result[0].category_path).toBe("Dairy > Milk");
   });
 
-  it("creates product_tags view that unpacks JSON arrays", () => {
+  it("creates product_tags junction table", () => {
     initializeStoreDataSchema(db);
 
-    const views = db
+    const tables = db
       .prepare(
-        `SELECT name FROM sqlite_master WHERE type='view' AND name='product_tags'`
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='product_tags'`
       )
       .all() as Array<{ name: string }>;
 
-    expect(views.length).toBe(1);
+    expect(tables.length).toBe(1);
 
-    // Test the view unpacks JSON arrays correctly
+    // Test direct inserts into junction table
     db.exec(`
       INSERT INTO products (product_id, name, tags_filter, tags_popular)
       VALUES ('456', 'Test', '["Organic", "Gluten Free"]', '["Wegmans Brand"]')
+    `);
+    db.exec(`
+      INSERT INTO product_tags (product_id, tag_name, tag_type) VALUES ('456', 'Organic', 'filter');
+      INSERT INTO product_tags (product_id, tag_name, tag_type) VALUES ('456', 'Gluten Free', 'filter');
+      INSERT INTO product_tags (product_id, tag_name, tag_type) VALUES ('456', 'Wegmans Brand', 'popular');
     `);
 
     const result = db
@@ -416,6 +422,10 @@ describe("initializeStoreDataSchema", () => {
     expect(indexNames).toContain("idx_products_name");
     expect(indexNames).toContain("idx_products_brand");
     expect(indexNames).toContain("idx_products_category");
+    expect(indexNames).toContain("idx_products_aisle");
+    expect(indexNames).toContain("idx_products_upc");
+    expect(indexNames).toContain("idx_products_available");
+    expect(indexNames).toContain("idx_products_price");
   });
 
   it("creates index for nutrition_facts table", () => {
@@ -458,6 +468,6 @@ describe("initializeStoreDataSchema", () => {
     const tables = db
       .prepare(`SELECT name FROM sqlite_master WHERE type='table'`)
       .all();
-    expect(tables.length).toBe(5);
+    expect(tables.length).toBe(6);
   });
 });
